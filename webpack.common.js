@@ -1,23 +1,28 @@
-const Webpack = require('webpack');
+
+const Webpack = require("webpack");
+
 module.exports = {
   entry: {
-    vendor: './src/vendor.js',
-    main: './src/index.js'
+    vendor: "./src/vendor.js",
+    main: "./src/index.js",
   },
   module: {
     rules: [
       {
         test: /\.html$/,
-        use: ['html-loader']
+        use: ["html-loader"],
       },
       {
-        test: /\.(jpg|jpeg|png|gif|svg|pdf)$/,
+        test: /\.(png|jpe?g|gif|svg)$/i,
+        type: "asset/resource",
+      },
+      {
+        test: /\.(pdf)$/,
         use: [
           {
-            loader: 'file-loader',
+            loader: "file-loader",
             options: {
-              name: '[name].[hash].[ext]',
-              outputPath: 'assets'
+              name: "[name].[ext]",
             },
           },
         ],
@@ -27,8 +32,8 @@ module.exports = {
   // This config allows to use jQuery $ sign
   plugins: [
     new Webpack.ProvidePlugin({
-      $: 'jquery',
-      jQuery: 'jquery'
-    })
-  ]
-}
+      $: "jquery",
+      jQuery: "jquery",
+    }),
+  ],
+};

@@ -5,8 +5,8 @@ It's a work in progress project that I update and improve iteratively. It contai
 ## Website Link to my portfolio website:
 https://www.kevinokinedo.com
 
-## Website Preview:
-**Coming Soon**
-
-
-
+# ~ Webiste Preview: 🖼️ 
+![](/src/assets/portfolio_homepage.png) 
+![](/src/assets/portfolio_2.png) 
+![](/src/assets/portfolio_3.png) 
+![](/src/assets/portfolio_4.png) 

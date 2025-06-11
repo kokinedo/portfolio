@@ -63,7 +63,7 @@ const home = {
   },
   subline: (
     <>
-      We partner with forward-thinking companies to unlock AI's transformative potential. Our expertise in enterprise AI strategy, custom LLM development, and intelligent automation helps businesses gain competitive advantage and accelerate growth.
+      I'm Kevin, an Atlanta-based engineer building intuitive products powered by AI. I thrive on translating complex code into clean, user-friendly experiences. 
     </>
   ),
 };

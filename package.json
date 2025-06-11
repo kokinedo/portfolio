@@ -1,47 +1,44 @@
 {
-  "name": "simplefolio",
-  "version": "1.0.1",
-  "private": "true",
-  "description": "A clean, beautiful and responsive portfolio template for Developers!",
-  "main": "index.js",
+  "name": "@once-ui-system/magic-portfolio",
+  "version": "2.0.0",
   "scripts": {
-    "start": "webpack serve --config webpack.dev.js --open",
-    "build": "webpack --config webpack.prod.js"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/cobidev/simplefolio"
-  },
-  "keywords": [],
-  "author": "Jacobo Martinez",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/cobidev/simplefolio/issues"
-  },
-  "homepage": "https://github.com/cobidev/simplefolio#readme",
-  "devDependencies": {
-    "@webpack-cli/serve": "^1.5.1",
-    "clean-webpack-plugin": "^3.0.0",
-    "css-loader": "^5.2.6",
-    "file-loader": "^6.2.0",
-    "html-loader": "^2.1.2",
-    "html-webpack-plugin": "^5.3.2",
-    "mini-css-extract-plugin": "^1.6.1",
-    "node-sass": "^6.0.1",
-    "optimize-css-assets-webpack-plugin": "^5.0.4",
-    "prettier": "^2.3.2",
-    "sass-loader": "^12.1.0",
-    "style-loader": "^3.0.0",
-    "webpack": "^5.40.0",
-    "webpack-cli": "^4.7.2",
-    "webpack-dev-server": "^3.11.2",
-    "webpack-merge": "^5.8.0"
+    "dev": "next dev",
+    "export": "next export",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
   },
   "dependencies": {
-    "@popperjs/core": "^2.9.2",
-    "bootstrap": "^5.0.2",
-    "jquery": "^3.6.0",
-    "popper.js": "^1.16.1",
-    "tilt.js": "^1.2.1"
+    "@calcom/embed-react": "^1.5.3",
+    "@floating-ui/react-dom": "^2.1.2",
+    "@mdx-js/loader": "^3.1.0",
+    "@next/mdx": "^15.3.1",
+    "classnames": "^2.5.1",
+    "cookie": "^1.0.2",
+    "gray-matter": "^4.0.3",
+    "next": "^15.3.1",
+    "next-mdx-remote": "^5.0.0",
+    "postcss": "^8.5.3",
+    "postcss-preset-env": "^9.6.0",
+    "prismjs": "^1.30.0",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "react-icons": "^5.5.0",
+    "react-masonry-css": "^1.0.16",
+    "remark": "^15.0.1",
+    "remark-html": "^16.0.1",
+    "sass": "^1.86.3",
+    "sharp": "^0.34.1"
+  },
+  "devDependencies": {
+    "@csstools/postcss-global-data": "^2.1.1",
+    "@types/cookie": "^0.6.0",
+    "@types/node": "^20.17.30",
+    "@types/react": "^18.3.20",
+    "@types/react-dom": "^18.3.6",
+    "eslint": "^9.25.0",
+    "postcss-custom-media": "^10.0.8",
+    "postcss-flexbugs-fixes": "^5.0.2",
+    "typescript": "^5.8.3"
   }
 }

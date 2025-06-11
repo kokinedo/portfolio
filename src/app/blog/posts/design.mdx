@@ -1,0 +1,894 @@
+---
+title: "Computer Vision and Multimodal AI: Beyond Text Generation"
+summary: "Explore advanced computer vision architectures, multimodal AI systems, and techniques for building AI that understands both visual and textual data."
+publishedAt: "2025-02-02"
+tag: "Computer Vision"
+---
+
+## The Multimodal Revolution
+
+AI systems are rapidly evolving beyond single-modality understanding. Modern applications require seamless integration of visual, textual, and audio data, enabling richer, more human-like AI interactions.
+
+## Advanced Computer Vision Architectures
+
+### Vision Transformers (ViTs) and Beyond
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from einops import rearrange, repeat
+from einops.layers.torch import Rearrange
+
+class PatchEmbedding(nn.Module):
+    """Convert image to sequence of patches"""
+    
+    def __init__(self, img_size=224, patch_size=16, in_channels=3, embed_dim=768):
+        super().__init__()
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.num_patches = (img_size // patch_size) ** 2
+        
+        self.projection = nn.Sequential(
+            nn.Conv2d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size),
+            Rearrange('b e h w -> b (h w) e')
+        )
+        
+    def forward(self, x):
+        return self.projection(x)
+
+class MultiHeadSelfAttention(nn.Module):
+    """Multi-head self attention for Vision Transformer"""
+    
+    def __init__(self, embed_dim, num_heads, dropout=0.1):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        
+        assert embed_dim % num_heads == 0
+        
+        self.qkv = nn.Linear(embed_dim, embed_dim * 3)
+        self.proj = nn.Linear(embed_dim, embed_dim)
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, x):
+        B, N, C = x.shape
+        
+        qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        
+        # Scaled dot-product attention
+        attn = (q @ k.transpose(-2, -1)) * (self.head_dim ** -0.5)
+        attn = F.softmax(attn, dim=-1)
+        attn = self.dropout(attn)
+        
+        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.dropout(x)
+        
+        return x, attn
+
+class VisionTransformer(nn.Module):
+    """Vision Transformer implementation"""
+    
+    def __init__(self, img_size=224, patch_size=16, in_channels=3, num_classes=1000,
+                 embed_dim=768, depth=12, num_heads=12, mlp_ratio=4, dropout=0.1):
+        super().__init__()
+        
+        self.patch_embed = PatchEmbedding(img_size, patch_size, in_channels, embed_dim)
+        num_patches = self.patch_embed.num_patches
+        
+        # Learnable position embeddings
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+        self.dropout = nn.Dropout(dropout)
+        
+        # Transformer blocks
+        self.blocks = nn.ModuleList([
+            TransformerBlock(embed_dim, num_heads, mlp_ratio, dropout)
+            for _ in range(depth)
+        ])
+        
+        # Classification head
+        self.norm = nn.LayerNorm(embed_dim)
+        self.head = nn.Linear(embed_dim, num_classes)
+        
+        # Initialize weights
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+            
+    def forward(self, x):
+        B = x.shape[0]
+        
+        # Patch embedding
+        x = self.patch_embed(x)
+        
+        # Add cls token
+        cls_tokens = repeat(self.cls_token, '1 1 d -> b 1 d', b=B)
+        x = torch.cat([cls_tokens, x], dim=1)
+        
+        # Add position embedding
+        x = x + self.pos_embed
+        x = self.dropout(x)
+        
+        # Apply transformer blocks
+        attention_weights = []
+        for block in self.blocks:
+            x, attn = block(x)
+            attention_weights.append(attn)
+        
+        # Classification
+        x = self.norm(x)
+        cls_output = x[:, 0]  # Use cls token
+        logits = self.head(cls_output)
+        
+        return logits, attention_weights
+
+class TransformerBlock(nn.Module):
+    """Transformer block with attention and MLP"""
+    
+    def __init__(self, embed_dim, num_heads, mlp_ratio=4, dropout=0.1):
+        super().__init__()
+        
+        self.norm1 = nn.LayerNorm(embed_dim)
+        self.attn = MultiHeadSelfAttention(embed_dim, num_heads, dropout)
+        
+        self.norm2 = nn.LayerNorm(embed_dim)
+        mlp_hidden_dim = int(embed_dim * mlp_ratio)
+        self.mlp = nn.Sequential(
+            nn.Linear(embed_dim, mlp_hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(mlp_hidden_dim, embed_dim),
+            nn.Dropout(dropout)
+        )
+        
+    def forward(self, x):
+        # Self-attention with residual connection
+        attn_output, attn_weights = self.attn(self.norm1(x))
+        x = x + attn_output
+        
+        # MLP with residual connection
+        x = x + self.mlp(self.norm2(x))
+        
+        return x, attn_weights`,
+        language: "python",
+        label: "Vision Transformer Implementation"
+      }
+    ]}
+/>
+
+### Advanced CNN Architectures
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`class EfficientNet(nn.Module):
+    """EfficientNet implementation with compound scaling"""
+    
+    def __init__(self, width_coefficient=1.0, depth_coefficient=1.0, 
+                 resolution=224, dropout_rate=0.2, num_classes=1000):
+        super().__init__()
+        
+        # Stem
+        stem_channels = self._round_filters(32, width_coefficient)
+        self.stem = nn.Sequential(
+            nn.Conv2d(3, stem_channels, 3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(stem_channels),
+            nn.SiLU(inplace=True)
+        )
+        
+        # Mobile Inverted Bottleneck blocks
+        self.blocks = self._make_blocks(width_coefficient, depth_coefficient)
+        
+        # Head
+        head_channels = self._round_filters(1280, width_coefficient)
+        self.head = nn.Sequential(
+            nn.Conv2d(self.blocks[-1].out_channels, head_channels, 1, bias=False),
+            nn.BatchNorm2d(head_channels),
+            nn.SiLU(inplace=True),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(head_channels, num_classes)
+        )
+        
+    def _round_filters(self, filters, width_coefficient):
+        """Round number of filters based on width multiplier"""
+        if not width_coefficient:
+            return filters
+        return int((filters * width_coefficient + 4) // 8) * 8
+    
+    def _round_repeats(self, repeats, depth_coefficient):
+        """Round number of repeats based on depth multiplier"""
+        if not depth_coefficient:
+            return repeats
+        return int(repeats * depth_coefficient)
+    
+    def _make_blocks(self, width_coefficient, depth_coefficient):
+        """Create MobileNet blocks with scaling"""
+        # EfficientNet-B0 base configuration
+        blocks_args = [
+            # (kernel_size, in_channels, out_channels, exp_ratio, stride, repeats)
+            (3, 32, 16, 1, 1, 1),
+            (3, 16, 24, 6, 2, 2),
+            (5, 24, 40, 6, 2, 2),
+            (3, 40, 80, 6, 2, 3),
+            (5, 80, 112, 6, 1, 3),
+            (5, 112, 192, 6, 2, 4),
+            (3, 192, 320, 6, 1, 1)
+        ]
+        
+        blocks = nn.ModuleList()
+        
+        for kernel_size, in_ch, out_ch, exp_ratio, stride, repeats in blocks_args:
+            in_channels = self._round_filters(in_ch, width_coefficient)
+            out_channels = self._round_filters(out_ch, width_coefficient)
+            num_repeats = self._round_repeats(repeats, depth_coefficient)
+            
+            # First block with potential stride
+            blocks.append(
+                MBConvBlock(in_channels, out_channels, kernel_size, 
+                          stride, exp_ratio, se_ratio=0.25)
+            )
+            
+            # Remaining blocks
+            for _ in range(num_repeats - 1):
+                blocks.append(
+                    MBConvBlock(out_channels, out_channels, kernel_size, 
+                              1, exp_ratio, se_ratio=0.25)
+                )
+        
+        return blocks
+    
+    def forward(self, x):
+        x = self.stem(x)
+        
+        for block in self.blocks:
+            x = block(x)
+            
+        x = self.head(x)
+        return x
+
+class MBConvBlock(nn.Module):
+    """Mobile Inverted Bottleneck Block with Squeeze-and-Excitation"""
+    
+    def __init__(self, in_channels, out_channels, kernel_size, stride, 
+                 expansion_ratio, se_ratio=0.25):
+        super().__init__()
+        self.stride = stride
+        self.use_residual = stride == 1 and in_channels == out_channels
+        
+        # Expansion phase
+        expanded_channels = in_channels * expansion_ratio
+        if expansion_ratio != 1:
+            self.expand = nn.Sequential(
+                nn.Conv2d(in_channels, expanded_channels, 1, bias=False),
+                nn.BatchNorm2d(expanded_channels),
+                nn.SiLU(inplace=True)
+            )
+        else:
+            self.expand = nn.Identity()
+        
+        # Depthwise convolution
+        self.depthwise = nn.Sequential(
+            nn.Conv2d(expanded_channels, expanded_channels, kernel_size, 
+                     stride=stride, padding=kernel_size//2, groups=expanded_channels, bias=False),
+            nn.BatchNorm2d(expanded_channels),
+            nn.SiLU(inplace=True)
+        )
+        
+        # Squeeze-and-Excitation
+        if se_ratio > 0:
+            se_channels = max(1, int(in_channels * se_ratio))
+            self.se = SqueezeExcitation(expanded_channels, se_channels)
+        else:
+            self.se = nn.Identity()
+        
+        # Output projection
+        self.project = nn.Sequential(
+            nn.Conv2d(expanded_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels)
+        )
+        
+        self.out_channels = out_channels
+        
+    def forward(self, x):
+        identity = x
+        
+        # Expansion
+        x = self.expand(x)
+        
+        # Depthwise convolution
+        x = self.depthwise(x)
+        
+        # Squeeze-and-Excitation
+        x = self.se(x)
+        
+        # Output projection
+        x = self.project(x)
+        
+        # Residual connection
+        if self.use_residual:
+            x = x + identity
+            
+        return x
+
+class SqueezeExcitation(nn.Module):
+    """Squeeze-and-Excitation module"""
+    
+    def __init__(self, in_channels, se_channels):
+        super().__init__()
+        self.se = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_channels, se_channels, 1),
+            nn.SiLU(inplace=True),
+            nn.Conv2d(se_channels, in_channels, 1),
+            nn.Sigmoid()
+        )
+        
+    def forward(self, x):
+        return x * self.se(x)`,
+        language: "python",
+        label: "EfficientNet Architecture"
+      }
+    ]}
+/>
+
+## Multimodal AI Systems
+
+### Vision-Language Models
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`class VisionLanguageModel(nn.Module):
+    """Multimodal model for vision-language tasks"""
+    
+    def __init__(self, vision_encoder, text_encoder, projection_dim=512):
+        super().__init__()
+        
+        self.vision_encoder = vision_encoder
+        self.text_encoder = text_encoder
+        self.projection_dim = projection_dim
+        
+        # Projection heads
+        vision_dim = vision_encoder.embed_dim if hasattr(vision_encoder, 'embed_dim') else 768
+        text_dim = text_encoder.config.hidden_size if hasattr(text_encoder, 'config') else 768
+        
+        self.vision_projection = nn.Sequential(
+            nn.Linear(vision_dim, projection_dim),
+            nn.ReLU(),
+            nn.Linear(projection_dim, projection_dim)
+        )
+        
+        self.text_projection = nn.Sequential(
+            nn.Linear(text_dim, projection_dim),
+            nn.ReLU(),
+            nn.Linear(projection_dim, projection_dim)
+        )
+        
+        # Cross-modal attention
+        self.cross_attention = CrossModalAttention(projection_dim)
+        
+        # Task-specific heads
+        self.classification_head = nn.Linear(projection_dim * 2, 1000)  # ImageNet classes
+        self.captioning_head = nn.Linear(projection_dim, text_dim)
+        
+        # Temperature parameter for contrastive learning
+        self.temperature = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+        
+    def encode_image(self, images):
+        """Encode images to feature vectors"""
+        vision_features = self.vision_encoder(images)
+        if isinstance(vision_features, tuple):
+            vision_features = vision_features[0]  # Take logits if tuple
+            
+        # Use CLS token or global average pooling
+        if len(vision_features.shape) == 3:  # [B, N, D] from ViT
+            vision_features = vision_features[:, 0]  # CLS token
+        elif len(vision_features.shape) == 4:  # [B, C, H, W] from CNN
+            vision_features = F.adaptive_avg_pool2d(vision_features, 1).flatten(1)
+            
+        return self.vision_projection(vision_features)
+    
+    def encode_text(self, texts, attention_mask=None):
+        """Encode texts to feature vectors"""
+        text_outputs = self.text_encoder(texts, attention_mask=attention_mask)
+        
+        # Use CLS token or mean pooling
+        if hasattr(text_outputs, 'last_hidden_state'):
+            text_features = text_outputs.last_hidden_state[:, 0]  # CLS token
+        else:
+            text_features = text_outputs[0][:, 0]
+            
+        return self.text_projection(text_features)
+    
+    def forward(self, images, texts=None, attention_mask=None, task='contrastive'):
+        """Forward pass for different tasks"""
+        
+        image_features = self.encode_image(images)
+        
+        if task == 'contrastive' and texts is not None:
+            text_features = self.encode_text(texts, attention_mask)
+            
+            # Normalize features
+            image_features = F.normalize(image_features, dim=-1)
+            text_features = F.normalize(text_features, dim=-1)
+            
+            # Compute similarity matrix
+            logits_per_image = image_features @ text_features.T * self.temperature.exp()
+            logits_per_text = logits_per_image.T
+            
+            return logits_per_image, logits_per_text
+            
+        elif task == 'classification':
+            # Visual question answering or image classification
+            if texts is not None:
+                text_features = self.encode_text(texts, attention_mask)
+                fused_features = self.cross_attention(image_features, text_features)
+            else:
+                fused_features = torch.cat([image_features, image_features], dim=-1)
+                
+            return self.classification_head(fused_features)
+            
+        elif task == 'captioning':
+            # Image captioning
+            caption_features = self.captioning_head(image_features)
+            return caption_features
+            
+        else:
+            return image_features
+
+class CrossModalAttention(nn.Module):
+    """Cross-modal attention for vision-language fusion"""
+    
+    def __init__(self, embed_dim, num_heads=8):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        
+        self.q_proj = nn.Linear(embed_dim, embed_dim)
+        self.k_proj = nn.Linear(embed_dim, embed_dim)
+        self.v_proj = nn.Linear(embed_dim, embed_dim)
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+        
+    def forward(self, vision_features, text_features):
+        """
+        Args:
+            vision_features: [B, D]
+            text_features: [B, D]
+        Returns:
+            fused_features: [B, 2*D]
+        """
+        B = vision_features.size(0)
+        
+        # Expand dimensions for attention
+        vision_expanded = vision_features.unsqueeze(1)  # [B, 1, D]
+        text_expanded = text_features.unsqueeze(1)      # [B, 1, D]
+        
+        # Vision-to-text attention
+        q_v = self.q_proj(vision_expanded).view(B, 1, self.num_heads, self.head_dim).transpose(1, 2)
+        k_t = self.k_proj(text_expanded).view(B, 1, self.num_heads, self.head_dim).transpose(1, 2)
+        v_t = self.v_proj(text_expanded).view(B, 1, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        attn_weights_vt = F.softmax(torch.matmul(q_v, k_t.transpose(-2, -1)) / (self.head_dim ** 0.5), dim=-1)
+        vision_attended = torch.matmul(attn_weights_vt, v_t).transpose(1, 2).contiguous().view(B, 1, self.embed_dim)
+        
+        # Text-to-vision attention
+        q_t = self.q_proj(text_expanded).view(B, 1, self.num_heads, self.head_dim).transpose(1, 2)
+        k_v = self.k_proj(vision_expanded).view(B, 1, self.num_heads, self.head_dim).transpose(1, 2)
+        v_v = self.v_proj(vision_expanded).view(B, 1, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        attn_weights_tv = F.softmax(torch.matmul(q_t, k_v.transpose(-2, -1)) / (self.head_dim ** 0.5), dim=-1)
+        text_attended = torch.matmul(attn_weights_tv, v_v).transpose(1, 2).contiguous().view(B, 1, self.embed_dim)
+        
+        # Combine attended features
+        fused = torch.cat([vision_attended.squeeze(1), text_attended.squeeze(1)], dim=-1)
+        
+        return fused
+
+def contrastive_loss(logits_per_image, logits_per_text):
+    """Contrastive loss for vision-language alignment"""
+    batch_size = logits_per_image.shape[0]
+    labels = torch.arange(batch_size, device=logits_per_image.device)
+    
+    loss_img = F.cross_entropy(logits_per_image, labels)
+    loss_txt = F.cross_entropy(logits_per_text, labels)
+    
+    return (loss_img + loss_txt) / 2`,
+        language: "python",
+        label: "Vision-Language Model"
+      }
+    ]}
+/>
+
+## Object Detection and Segmentation
+
+### Modern Detection Architectures
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`import torchvision.ops as ops
+
+class DETR(nn.Module):
+    """DEtection TRansformer (DETR) implementation"""
+    
+    def __init__(self, backbone, transformer, num_classes, num_queries=100):
+        super().__init__()
+        self.backbone = backbone
+        self.transformer = transformer
+        self.num_classes = num_classes
+        self.num_queries = num_queries
+        
+        # Learnable object queries
+        self.query_embed = nn.Embedding(num_queries, transformer.d_model)
+        
+        # Prediction heads
+        self.class_head = nn.Linear(transformer.d_model, num_classes + 1)  # +1 for no-object
+        self.bbox_head = nn.Sequential(
+            nn.Linear(transformer.d_model, transformer.d_model),
+            nn.ReLU(),
+            nn.Linear(transformer.d_model, 4)  # x, y, w, h
+        )
+        
+        # Position encoding for spatial features
+        self.pos_encoding = PositionalEncoding2D(transformer.d_model // 2)
+        
+    def forward(self, images, targets=None):
+        # Extract features from backbone
+        features = self.backbone(images)
+        if isinstance(features, dict):
+            features = features['feat']  # Take last feature map
+            
+        B, C, H, W = features.shape
+        
+        # Flatten spatial dimensions
+        features = features.flatten(2).permute(2, 0, 1)  # [HW, B, C]
+        
+        # Add positional encoding
+        pos_embed = self.pos_encoding(H, W).flatten(2).permute(2, 0, 1)  # [HW, B, C]
+        
+        # Object queries
+        query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, B, 1)  # [Q, B, C]
+        
+        # Transformer
+        decoder_output = self.transformer(features, query_embed, pos_embed)
+        
+        # Predictions
+        class_logits = self.class_head(decoder_output)  # [Q, B, num_classes+1]
+        bbox_coords = self.bbox_head(decoder_output).sigmoid()  # [Q, B, 4]
+        
+        # Reshape for output
+        class_logits = class_logits.permute(1, 0, 2)  # [B, Q, num_classes+1]
+        bbox_coords = bbox_coords.permute(1, 0, 2)    # [B, Q, 4]
+        
+        output = {
+            'pred_logits': class_logits,
+            'pred_boxes': bbox_coords
+        }
+        
+        if self.training and targets is not None:
+            output['loss'] = self.compute_loss(class_logits, bbox_coords, targets)
+            
+        return output
+    
+    def compute_loss(self, class_logits, bbox_coords, targets):
+        """Compute Hungarian matching loss"""
+        # Hungarian matching
+        indices = self.hungarian_matcher(class_logits, bbox_coords, targets)
+        
+        # Classification loss
+        target_classes = torch.full(class_logits.shape[:2], self.num_classes, 
+                                  dtype=torch.int64, device=class_logits.device)
+        
+        for i, (src_idx, tgt_idx) in enumerate(indices):
+            target_classes[i, src_idx] = targets[i]['labels'][tgt_idx]
+            
+        class_loss = F.cross_entropy(class_logits.flatten(0, 1), target_classes.flatten())
+        
+        # Box regression loss
+        bbox_loss = 0
+        num_boxes = 0
+        
+        for i, (src_idx, tgt_idx) in enumerate(indices):
+            if len(src_idx) > 0:
+                src_boxes = bbox_coords[i, src_idx]
+                tgt_boxes = targets[i]['boxes'][tgt_idx]
+                
+                bbox_loss += F.l1_loss(src_boxes, tgt_boxes, reduction='sum')
+                bbox_loss += self.generalized_iou_loss(src_boxes, tgt_boxes)
+                num_boxes += len(tgt_boxes)
+        
+        if num_boxes > 0:
+            bbox_loss = bbox_loss / num_boxes
+            
+        return {
+            'class_loss': class_loss,
+            'bbox_loss': bbox_loss,
+            'total_loss': class_loss + 5 * bbox_loss  # Weight bbox loss
+        }
+    
+    def hungarian_matcher(self, class_logits, bbox_coords, targets):
+        """Hungarian algorithm for bipartite matching"""
+        from scipy.optimize import linear_sum_assignment
+        
+        indices = []
+        
+        for i in range(len(targets)):
+            # Cost matrix computation
+            tgt_labels = targets[i]['labels']
+            tgt_boxes = targets[i]['boxes']
+            
+            # Classification cost
+            class_cost = -class_logits[i, :, tgt_labels]  # [Q, num_targets]
+            
+            # Box cost
+            bbox_cost = torch.cdist(bbox_coords[i], tgt_boxes, p=1)  # L1 distance
+            
+            # Total cost
+            cost_matrix = class_cost + 5 * bbox_cost
+            
+            # Hungarian matching
+            src_idx, tgt_idx = linear_sum_assignment(cost_matrix.detach().cpu().numpy())
+            
+            indices.append((torch.from_numpy(src_idx), torch.from_numpy(tgt_idx)))
+            
+        return indices
+    
+    def generalized_iou_loss(self, pred_boxes, target_boxes):
+        """Generalized IoU loss"""
+        return 1 - ops.generalized_box_iou(
+            ops.box_convert(pred_boxes, 'cxcywh', 'xyxy'),
+            ops.box_convert(target_boxes, 'cxcywh', 'xyxy')
+        ).diag().mean()
+
+class PositionalEncoding2D(nn.Module):
+    """2D positional encoding for spatial features"""
+    
+    def __init__(self, embed_dim, temperature=10000):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.temperature = temperature
+        
+    def forward(self, height, width):
+        device = next(self.parameters()).device
+        
+        y_embed = torch.arange(height, dtype=torch.float32, device=device).unsqueeze(1)
+        x_embed = torch.arange(width, dtype=torch.float32, device=device).unsqueeze(0)
+        
+        y_embed = y_embed.repeat(1, width)
+        x_embed = x_embed.repeat(height, 1)
+        
+        dim_t = torch.arange(self.embed_dim, dtype=torch.float32, device=device)
+        dim_t = self.temperature ** (2 * (dim_t // 2) / self.embed_dim)
+        
+        pos_x = x_embed[:, :, None] / dim_t
+        pos_y = y_embed[:, :, None] / dim_t
+        
+        pos_x = torch.stack([pos_x[:, :, 0::2].sin(), pos_x[:, :, 1::2].cos()], dim=3).flatten(2)
+        pos_y = torch.stack([pos_y[:, :, 0::2].sin(), pos_y[:, :, 1::2].cos()], dim=3).flatten(2)
+        
+        pos = torch.cat([pos_y, pos_x], dim=2).unsqueeze(0)
+        
+        return pos`,
+        language: "python",
+        label: "DETR Object Detection"
+      }
+    ]}
+/>
+
+## Training and Evaluation
+
+### Advanced Training Techniques
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`class MultimodalTrainer:
+    """Advanced trainer for multimodal AI systems"""
+    
+    def __init__(self, model, optimizer, device='cuda'):
+        self.model = model
+        self.optimizer = optimizer
+        self.device = device
+        self.scaler = torch.cuda.amp.GradScaler()
+        
+    def train_epoch(self, dataloader, epoch):
+        """Training loop with mixed precision and gradient accumulation"""
+        self.model.train()
+        total_loss = 0
+        num_batches = 0
+        
+        for batch_idx, batch in enumerate(dataloader):
+            images = batch['images'].to(self.device)
+            texts = batch['texts'].to(self.device) if 'texts' in batch else None
+            targets = batch['targets'] if 'targets' in batch else None
+            
+            # Mixed precision forward pass
+            with torch.cuda.amp.autocast():
+                if texts is not None:
+                    # Multimodal task
+                    logits_img, logits_txt = self.model(images, texts, task='contrastive')
+                    loss = contrastive_loss(logits_img, logits_txt)
+                else:
+                    # Vision-only task
+                    outputs = self.model(images, targets=targets, task='detection')
+                    loss = outputs['loss']['total_loss']
+            
+            # Backward pass with gradient scaling
+            self.scaler.scale(loss).backward()
+            
+            # Gradient clipping
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            
+            # Optimizer step
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            self.optimizer.zero_grad()
+            
+            total_loss += loss.item()
+            num_batches += 1
+            
+            if batch_idx % 100 == 0:
+                print(f'Epoch {epoch}, Batch {batch_idx}: Loss {loss.item():.4f}')
+        
+        return total_loss / num_batches
+    
+    def evaluate(self, dataloader, task='contrastive'):
+        """Evaluation with multiple metrics"""
+        self.model.eval()
+        
+        if task == 'contrastive':
+            return self.evaluate_retrieval(dataloader)
+        elif task == 'detection':
+            return self.evaluate_detection(dataloader)
+        elif task == 'classification':
+            return self.evaluate_classification(dataloader)
+    
+    def evaluate_retrieval(self, dataloader):
+        """Evaluate image-text retrieval performance"""
+        image_features = []
+        text_features = []
+        
+        with torch.no_grad():
+            for batch in dataloader:
+                images = batch['images'].to(self.device)
+                texts = batch['texts'].to(self.device)
+                
+                # Extract features
+                img_feat = self.model.encode_image(images)
+                txt_feat = self.model.encode_text(texts)
+                
+                image_features.append(img_feat)
+                text_features.append(txt_feat)
+        
+        # Concatenate all features
+        image_features = torch.cat(image_features, dim=0)
+        text_features = torch.cat(text_features, dim=0)
+        
+        # Compute similarity matrix
+        similarity_matrix = image_features @ text_features.T
+        
+        # Calculate recall@k
+        recalls = self.calculate_recall_at_k(similarity_matrix, k_values=[1, 5, 10])
+        
+        return {
+            'image_to_text_recall': recalls,
+            'text_to_image_recall': self.calculate_recall_at_k(similarity_matrix.T, k_values=[1, 5, 10])
+        }
+    
+    def calculate_recall_at_k(self, similarity_matrix, k_values=[1, 5, 10]):
+        """Calculate Recall@K for retrieval tasks"""
+        num_samples = similarity_matrix.size(0)
+        recalls = {}
+        
+        # Get ranked indices
+        ranked_indices = torch.argsort(similarity_matrix, dim=1, descending=True)
+        
+        for k in k_values:
+            correct = 0
+            for i in range(num_samples):
+                if i in ranked_indices[i, :k]:  # Check if correct match is in top-k
+                    correct += 1
+            
+            recalls[f'R@{k}'] = correct / num_samples
+        
+        return recalls
+    
+    def evaluate_detection(self, dataloader):
+        """Evaluate object detection performance"""
+        from pycocotools.coco import COCO
+        from pycocotools.cocoeval import COCOeval
+        
+        # This would integrate with COCO evaluation
+        # Simplified version here
+        total_map = 0
+        num_batches = 0
+        
+        with torch.no_grad():
+            for batch in dataloader:
+                images = batch['images'].to(self.device)
+                targets = batch['targets']
+                
+                outputs = self.model(images, task='detection')
+                
+                # Calculate mAP (simplified)
+                batch_map = self.calculate_map(outputs, targets)
+                total_map += batch_map
+                num_batches += 1
+        
+        return {'mAP': total_map / num_batches}
+    
+    def calculate_map(self, outputs, targets):
+        """Simplified mAP calculation"""
+        # This would use proper COCO evaluation
+        # Placeholder implementation
+        return 0.5  # Dummy value
+
+def create_multimodal_dataset(image_dir, text_file, transform=None):
+    """Create dataset for multimodal training"""
+    
+    class MultimodalDataset(torch.utils.data.Dataset):
+        def __init__(self, image_dir, text_file, transform=None):
+            self.image_dir = image_dir
+            self.transform = transform
+            
+            # Load text data
+            with open(text_file, 'r') as f:
+                self.text_data = [line.strip() for line in f]
+        
+        def __len__(self):
+            return len(self.text_data)
+        
+        def __getitem__(self, idx):
+            # Load image
+            img_path = os.path.join(self.image_dir, f"{idx}.jpg")
+            image = Image.open(img_path).convert('RGB')
+            
+            if self.transform:
+                image = self.transform(image)
+            
+            # Get corresponding text
+            text = self.text_data[idx]
+            
+            return {
+                'images': image,
+                'texts': text,
+                'image_id': idx
+            }
+    
+    return MultimodalDataset(image_dir, text_file, transform)`,
+        language: "python",
+        label: "Multimodal Training Pipeline"
+      }
+    ]}
+/>
+
+Computer vision and multimodal AI represent the cutting edge of artificial intelligence, enabling systems that can understand and reason about visual content in context. Master these techniques to build AI that truly sees and understands the world. 

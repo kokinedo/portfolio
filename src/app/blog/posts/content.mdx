@@ -1,0 +1,646 @@
+---
+title: "Advanced Prompt Engineering: Beyond Basic Instructions"
+summary: "Master sophisticated prompt engineering techniques including chain-of-thought, tree-of-thought, and context optimization for maximum LLM performance."
+publishedAt: "2025-01-20"
+tag: "Prompt Engineering"
+---
+
+## The Evolution of Prompt Engineering
+
+Prompt engineering has evolved from simple instruction writing to a sophisticated discipline requiring deep understanding of language model behavior, cognitive patterns, and systematic optimization techniques.
+
+## Chain-of-Thought (CoT) Reasoning
+
+### Basic Chain-of-Thought
+
+Chain-of-thought prompting improves reasoning by encouraging step-by-step thinking.
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`# Basic CoT example
+prompt = """
+Solve this step by step:
+
+Problem: A company has 240 employees. 30% work remotely, 
+45% work in the office, and the rest work hybrid. 
+How many employees work hybrid?
+
+Solution:
+Step 1: Calculate remote workers
+Remote workers = 240 × 30% = 240 × 0.30 = 72 employees
+
+Step 2: Calculate office workers  
+Office workers = 240 × 45% = 240 × 0.45 = 108 employees
+
+Step 3: Calculate hybrid workers
+Hybrid workers = Total - Remote - Office
+Hybrid workers = 240 - 72 - 108 = 60 employees
+
+Therefore, 60 employees work hybrid.
+
+Now solve this problem: {new_problem}
+"""`,
+        language: "python",
+        label: "Chain-of-Thought Prompt"
+      }
+    ]}
+/>
+
+### Zero-Shot Chain-of-Thought
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`def zero_shot_cot(problem):
+    prompt = f"""
+{problem}
+
+Let's think step by step.
+"""
+    return prompt
+
+def few_shot_cot(problem, examples):
+    example_text = ""
+    for i, (ex_problem, ex_solution) in enumerate(examples):
+        example_text += f"""
+Example {i+1}:
+Problem: {ex_problem}
+Solution: {ex_solution}
+
+"""
+    
+    prompt = f"""
+{example_text}
+Now solve this problem step by step:
+Problem: {problem}
+Solution:
+"""
+    return prompt`,
+        language: "python",
+        label: "CoT Variations"
+      }
+    ]}
+/>
+
+## Tree-of-Thought (ToT) Reasoning
+
+Tree-of-thought enables exploration of multiple reasoning paths for complex problems.
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`class TreeOfThought:
+    def __init__(self, llm_client):
+        self.llm = llm_client
+        
+    def generate_thoughts(self, problem, num_thoughts=3):
+        prompt = f"""
+Problem: {problem}
+
+Generate {num_thoughts} different approaches to solve this problem:
+
+Approach 1:
+Approach 2: 
+Approach 3:
+"""
+        response = self.llm.complete(prompt)
+        return self.parse_approaches(response)
+    
+    def evaluate_thoughts(self, problem, thoughts):
+        evaluations = []
+        
+        for i, thought in enumerate(thoughts):
+            eval_prompt = f"""
+Problem: {problem}
+Approach: {thought}
+
+Rate this approach on a scale of 1-10 considering:
+- Feasibility (can it actually solve the problem?)
+- Efficiency (is it the most direct path?)
+- Completeness (does it address all aspects?)
+
+Rating: [1-10]
+Reasoning: [explanation]
+"""
+            evaluation = self.llm.complete(eval_prompt)
+            evaluations.append(evaluation)
+            
+        return evaluations
+    
+    def expand_best_thought(self, problem, best_thought):
+        expand_prompt = f"""
+Problem: {problem}
+Best approach: {best_thought}
+
+Now develop this approach step by step with detailed reasoning:
+
+Step 1:
+Step 2:
+Step 3:
+...
+Final Answer:
+"""
+        return self.llm.complete(expand_prompt)
+    
+    def solve(self, problem):
+        thoughts = self.generate_thoughts(problem)
+        
+        evaluations = self.evaluate_thoughts(problem, thoughts)
+        
+        best_idx = self.select_best_thought(evaluations)
+        best_thought = thoughts[best_idx]
+        
+        solution = self.expand_best_thought(problem, best_thought)
+        
+        return solution`,
+        language: "python",
+        label: "Tree-of-Thought Implementation"
+      }
+    ]}
+/>
+
+## Context Window Optimization
+
+### Dynamic Context Management
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`import tiktoken
+
+class ContextManager:
+    def __init__(self, model_name="gpt-4", max_tokens=8192):
+        self.encoding = tiktoken.encoding_for_model(model_name)
+        self.max_tokens = max_tokens
+        self.reserved_tokens = 1000  # Reserve for response
+        
+    def count_tokens(self, text):
+        return len(self.encoding.encode(text))
+    
+    def truncate_context(self, system_prompt, conversation_history, current_prompt):
+        system_tokens = self.count_tokens(system_prompt)
+        current_tokens = self.count_tokens(current_prompt)
+        available_tokens = self.max_tokens - system_tokens - current_tokens - self.reserved_tokens
+        
+        truncated_history = []
+        total_history_tokens = 0
+        
+        for message in reversed(conversation_history):
+            message_tokens = self.count_tokens(message)
+            if total_history_tokens + message_tokens <= available_tokens:
+                truncated_history.insert(0, message)
+                total_history_tokens += message_tokens
+            else:
+                break
+                
+        return system_prompt, truncated_history, current_prompt
+    
+    def compress_context(self, long_context, target_length=None):
+        if target_length is None:
+            target_length = self.max_tokens // 4
+            
+        compress_prompt = f"""
+Compress the following content to approximately {target_length} tokens 
+while preserving all key information and relationships:
+
+{long_context}
+
+Compressed version:
+"""
+        return compress_prompt`,
+        language: "python",
+        label: "Context Management"
+      }
+    ]}
+/>
+
+### Retrieval-Augmented Generation (RAG) Prompting
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`class RAGPromptManager:
+    def __init__(self, vector_db, embedding_model):
+        self.vector_db = vector_db
+        self.embedding_model = embedding_model
+        
+    def retrieve_relevant_context(self, query, top_k=5):
+        """Retrieve most relevant documents"""
+        query_embedding = self.embedding_model.encode(query)
+        
+        # Search vector database
+        results = self.vector_db.similarity_search(
+            query_embedding, 
+            top_k=top_k
+        )
+        
+        return [doc.content for doc in results]
+    
+    def build_rag_prompt(self, query, retrieved_docs, task_instruction=""):
+        """Build RAG prompt with retrieved context"""
+        
+        # Format retrieved documents
+        context_sections = []
+        for i, doc in enumerate(retrieved_docs):
+            context_sections.append(f"Document {i+1}:\n{doc}\n")
+            
+        context = "\n".join(context_sections)
+        
+        # Build complete prompt
+        prompt = f"""
+{task_instruction}
+
+Context Information:
+{context}
+
+Query: {query}
+
+Instructions:
+- Use only the information provided in the context
+- If the context doesn't contain enough information, say so
+- Cite specific documents when making claims (e.g., "According to Document 2...")
+- Be precise and factual
+
+Answer:
+"""
+        return prompt
+    
+    def multi_step_rag(self, initial_query, max_iterations=3):
+        """Multi-step RAG for complex queries"""
+        current_query = initial_query
+        all_context = []
+        
+        for iteration in range(max_iterations):
+            # Retrieve context for current query
+            docs = self.retrieve_relevant_context(current_query)
+            all_context.extend(docs)
+            
+            # Generate follow-up query if needed
+            if iteration < max_iterations - 1:
+                followup_prompt = f"""
+Based on this query: {current_query}
+And this context: {docs[0][:500]}...
+
+What additional information would be helpful to provide a complete answer?
+Generate a specific follow-up search query:
+"""
+                current_query = self.llm.complete(followup_prompt)
+                
+        # Build final prompt with all context
+        return self.build_rag_prompt(initial_query, all_context)`,
+        language: "python",
+        label: "RAG Prompt Engineering"
+      }
+    ]}
+/>
+
+## Role-Based Prompting
+
+### Expert Persona Development
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`class ExpertPersona:
+    def __init__(self, domain, expertise_level="senior"):
+        self.domain = domain
+        self.expertise_level = expertise_level
+        
+    def create_persona_prompt(self, task_type="analysis"):
+        """Create detailed expert persona"""
+        
+        personas = {
+            "data_scientist": {
+                "senior": """
+You are Dr. Sarah Chen, a Senior Principal Data Scientist with 15 years of experience 
+at top tech companies including Google and Netflix. You have:
+
+- PhD in Statistics from Stanford University
+- Published 50+ papers on machine learning and statistical methods
+- Led data science teams of 20+ people
+- Expert in causal inference, A/B testing, and ML at scale
+- Known for translating complex technical concepts into business value
+
+Your approach:
+- Always start with the business problem and work backwards
+- Question assumptions and look for potential biases
+- Provide multiple solution approaches with trade-offs
+- Include practical implementation considerations
+- Suggest metrics and validation strategies
+""",
+                "junior": """
+You are Alex Rodriguez, a Data Scientist with 2 years of experience, eager to learn 
+and apply best practices. You have:
+
+- MS in Data Science from UC Berkeley  
+- Strong foundation in Python, SQL, and basic ML
+- Experience with supervised learning and data visualization
+- Still learning advanced topics like deep learning and MLOps
+- Enthusiastic about staying current with new techniques
+
+Your approach:
+- Show your work step-by-step
+- Ask clarifying questions when assumptions aren't clear
+- Reference established best practices and frameworks
+- Acknowledge when something is beyond current expertise
+- Suggest resources for further learning
+"""
+            }
+        }
+        
+        return personas.get(self.domain, {}).get(self.expertise_level, "")
+    
+    def format_task_prompt(self, task_description, context=""):
+        """Format complete task prompt with persona"""
+        persona = self.create_persona_prompt()
+        
+        prompt = f"""
+{persona}
+
+Context: {context}
+
+Task: {task_description}
+
+Please approach this task using your expertise and experience. 
+Think through the problem systematically and provide actionable insights.
+
+Response:
+"""
+        return prompt`,
+        language: "python",
+        label: "Expert Persona Prompting"
+      }
+    ]}
+/>
+
+## Advanced Prompting Techniques
+
+### Self-Consistency Decoding
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`class SelfConsistencyPrompt:
+    def __init__(self, llm_client):
+        self.llm = llm_client
+        
+    def generate_multiple_solutions(self, problem, num_solutions=5):
+        """Generate multiple independent solutions"""
+        solutions = []
+        
+        for i in range(num_solutions):
+            prompt = f"""
+Problem: {problem}
+
+Solve this step by step. Show your reasoning clearly.
+
+Solution {i+1}:
+"""
+            solution = self.llm.complete(prompt, temperature=0.7)
+            solutions.append(solution)
+            
+        return solutions
+    
+    def extract_final_answers(self, solutions):
+        """Extract final numerical/categorical answers"""
+        answers = []
+        
+        for solution in solutions:
+            extract_prompt = f"""
+From this solution, extract only the final answer:
+
+{solution}
+
+Final answer (number or short phrase only):
+"""
+            answer = self.llm.complete(extract_prompt, temperature=0.1)
+            answers.append(answer.strip())
+            
+        return answers
+    
+    def find_consensus(self, answers):
+        """Find most common answer"""
+        from collections import Counter
+        answer_counts = Counter(answers)
+        
+        # Return most common answer and confidence
+        most_common = answer_counts.most_common(1)[0]
+        confidence = most_common[1] / len(answers)
+        
+        return most_common[0], confidence
+    
+    def solve_with_consensus(self, problem):
+        """Complete self-consistency solving"""
+        solutions = self.generate_multiple_solutions(problem)
+        answers = self.extract_final_answers(solutions)
+        consensus_answer, confidence = self.find_consensus(answers)
+        
+        return {
+            "answer": consensus_answer,
+            "confidence": confidence,
+            "all_solutions": solutions,
+            "all_answers": answers
+        }`,
+        language: "python",
+        label: "Self-Consistency Implementation"
+      }
+    ]}
+/>
+
+### Prompt Chaining and Decomposition
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`class PromptChain:
+    def __init__(self, llm_client):
+        self.llm = llm_client
+        self.chain_history = []
+        
+    def decompose_complex_task(self, complex_task):
+        """Break down complex task into subtasks"""
+        decompose_prompt = f"""
+Complex Task: {complex_task}
+
+Break this down into 3-5 specific, actionable subtasks that can be completed in sequence.
+Each subtask should be independent and clearly defined.
+
+Subtask 1:
+Subtask 2:
+Subtask 3:
+Subtask 4:
+Subtask 5:
+"""
+        response = self.llm.complete(decompose_prompt)
+        subtasks = self.parse_subtasks(response)
+        return subtasks
+    
+    def execute_subtask(self, subtask, previous_results=None):
+        """Execute individual subtask with context from previous steps"""
+        
+        context = ""
+        if previous_results:
+            context = f"""
+Previous results to consider:
+{previous_results}
+"""
+        
+        subtask_prompt = f"""
+{context}
+
+Current subtask: {subtask}
+
+Complete this subtask thoroughly and precisely:
+"""
+        
+        result = self.llm.complete(subtask_prompt)
+        self.chain_history.append({
+            "subtask": subtask,
+            "result": result
+        })
+        
+        return result
+    
+    def execute_chain(self, complex_task):
+        """Execute complete prompt chain"""
+        # Decompose task
+        subtasks = self.decompose_complex_task(complex_task)
+        
+        # Execute subtasks in sequence
+        results = []
+        previous_results = None
+        
+        for subtask in subtasks:
+            result = self.execute_subtask(subtask, previous_results)
+            results.append(result)
+            previous_results = "\n".join(results)
+            
+        # Synthesize final result
+        synthesis_prompt = f"""
+Original task: {complex_task}
+
+Subtask results:
+{previous_results}
+
+Synthesize these results into a comprehensive final answer:
+"""
+        
+        final_result = self.llm.complete(synthesis_prompt)
+        
+        return {
+            "subtasks": subtasks,
+            "subtask_results": results,
+            "final_result": final_result,
+            "chain_history": self.chain_history
+        }`,
+        language: "python",
+        label: "Prompt Chaining"
+      }
+    ]}
+/>
+
+## Prompt Optimization and Testing
+
+### A/B Testing for Prompts
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`import random
+from scipy import stats
+
+class PromptTester:
+    def __init__(self, llm_client):
+        self.llm = llm_client
+        self.test_results = []
+        
+    def run_ab_test(self, prompt_a, prompt_b, test_cases, evaluation_fn):
+        """Run A/B test between two prompts"""
+        results_a = []
+        results_b = []
+        
+        # Randomize test case assignment
+        shuffled_cases = test_cases.copy()
+        random.shuffle(shuffled_cases)
+        
+        mid_point = len(shuffled_cases) // 2
+        cases_a = shuffled_cases[:mid_point]
+        cases_b = shuffled_cases[mid_point:]
+        
+        # Test prompt A
+        for case in cases_a:
+            response = self.llm.complete(prompt_a.format(**case))
+            score = evaluation_fn(response, case.get('expected_output'))
+            results_a.append(score)
+            
+        # Test prompt B  
+        for case in cases_b:
+            response = self.llm.complete(prompt_b.format(**case))
+            score = evaluation_fn(response, case.get('expected_output'))
+            results_b.append(score)
+            
+        # Statistical analysis
+        t_stat, p_value = stats.ttest_ind(results_a, results_b)
+        
+        return {
+            'prompt_a_mean': np.mean(results_a),
+            'prompt_b_mean': np.mean(results_b),
+            'p_value': p_value,
+            'significant': p_value < 0.05,
+            'winner': 'A' if np.mean(results_a) > np.mean(results_b) else 'B'
+        }
+    
+    def optimize_prompt_iteratively(self, base_prompt, test_cases, evaluation_fn, iterations=5):
+        """Iteratively optimize prompt through multiple variations"""
+        current_best = base_prompt
+        best_score = 0
+        
+        for iteration in range(iterations):
+            # Generate variations
+            variations = self.generate_prompt_variations(current_best)
+            
+            # Test each variation
+            scores = []
+            for variation in variations:
+                total_score = 0
+                for case in test_cases:
+                    response = self.llm.complete(variation.format(**case))
+                    score = evaluation_fn(response, case.get('expected_output'))
+                    total_score += score
+                    
+                avg_score = total_score / len(test_cases)
+                scores.append(avg_score)
+                
+            # Select best performing variation
+            best_idx = np.argmax(scores)
+            if scores[best_idx] > best_score:
+                current_best = variations[best_idx]
+                best_score = scores[best_idx]
+                
+        return current_best, best_score`,
+        language: "python",
+        label: "Prompt Testing Framework"
+      }
+    ]}
+/>
+
+Master these advanced techniques to build sophisticated prompt engineering systems that consistently deliver high-quality results. Remember: the best prompt is one that's been systematically tested and optimized for your specific use case.

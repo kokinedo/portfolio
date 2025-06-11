@@ -1,0 +1,402 @@
+---
+title: "LLM Fine-tuning Strategies: From LoRA to Full Parameter Training"
+summary: "Master the art of fine-tuning large language models. Deep dive into LoRA, QLoRA, full fine-tuning, and advanced techniques for optimal performance."
+publishedAt: "2025-01-18"
+tag: "LLM Engineering"
+---
+
+## The Fine-tuning Landscape
+
+Fine-tuning large language models has evolved from a computationally expensive endeavor to a sophisticated toolkit of techniques. Understanding when and how to apply different fine-tuning strategies is crucial for building high-performance, domain-specific AI systems.
+
+## Parameter-Efficient Fine-tuning (PEFT)
+
+### LoRA (Low-Rank Adaptation)
+
+LoRA revolutionized LLM fine-tuning by updating only a small subset of parameters while maintaining competitive performance.
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
+
+model = AutoModelForCausalLM.from_pretrained(
+    "microsoft/DialoGPT-medium",
+    torch_dtype=torch.float16,
+    device_map="auto"
+)
+
+lora_config = LoraConfig(
+    r=16,
+    lora_alpha=32,
+    target_modules=["q_proj", "v_proj", "k_proj", "out_proj"],
+    lora_dropout=0.1,
+    bias="none",
+    task_type="CAUSAL_LM"
+)
+
+model = get_peft_model(model, lora_config)
+
+model.print_trainable_parameters()
+# Output: trainable params: 1,572,864 || all params: 354,823,168 || trainable%: 0.44`,
+        language: "python",
+        label: "LoRA Implementation"
+      }
+    ]}
+/>
+
+### QLoRA (Quantized LoRA)
+
+QLoRA combines 4-bit quantization with LoRA for memory-efficient fine-tuning of massive models.
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`from transformers import BitsAndBytesConfig
+import torch
+
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True,
+    bnb_4bit_use_double_quant=True,
+    bnb_4bit_quant_type="nf4",
+    bnb_4bit_compute_dtype=torch.bfloat16
+)
+
+model = AutoModelForCausalLM.from_pretrained(
+    "meta-llama/Llama-2-7b-hf",
+    quantization_config=bnb_config,
+    device_map="auto",
+    trust_remote_code=True
+)
+
+model = prepare_model_for_kbit_training(model)
+
+model = get_peft_model(model, lora_config)`,
+        language: "python",
+        label: "QLoRA Setup"
+      }
+    ]}
+/>
+
+## Full Fine-tuning Strategies
+
+### Gradient Checkpointing and Memory Optimization
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`from transformers import TrainingArguments, Trainer
+from torch.utils.data import DataLoader
+import torch.nn as nn
+
+# Training arguments with memory optimization
+training_args = TrainingArguments(
+    output_dir="./fine-tuned-model",
+    num_train_epochs=3,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=16,
+    gradient_checkpointing=True,
+    dataloader_pin_memory=False,
+    fp16=True,
+    logging_steps=10,
+    save_steps=500,
+    evaluation_strategy="steps",
+    eval_steps=500,
+    save_total_limit=2,
+    load_best_model_at_end=True,
+    metric_for_best_model="eval_loss",
+    greater_is_better=False,
+    warmup_steps=100,
+    learning_rate=5e-5,
+    weight_decay=0.01,
+    lr_scheduler_type="cosine"
+)
+
+# Custom trainer with memory optimization
+class MemoryEfficientTrainer(Trainer):
+    def training_step(self, model, inputs):
+        model.train()
+        inputs = self._prepare_inputs(inputs)
+        
+        with self.compute_loss_context_manager():
+            loss = self.compute_loss(model, inputs)
+        
+        if self.args.n_gpu > 1:
+            loss = loss.mean()
+            
+        if self.args.gradient_accumulation_steps > 1:
+            loss = loss / self.args.gradient_accumulation_steps
+            
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            
+        return loss.detach()`,
+        language: "python",
+        label: "Memory-Efficient Training"
+      }
+    ]}
+/>
+
+## Advanced Fine-tuning Techniques
+
+### Multi-task Learning
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`class MultiTaskLoss(nn.Module):
+    def __init__(self, task_weights=None):
+        super().__init__()
+        self.task_weights = task_weights or {}
+        
+    def forward(self, logits_dict, labels_dict):
+        total_loss = 0
+        loss_dict = {}
+        
+        for task_name, logits in logits_dict.items():
+            if task_name in labels_dict:
+                task_loss = nn.CrossEntropyLoss()(logits, labels_dict[task_name])
+                weight = self.task_weights.get(task_name, 1.0)
+                weighted_loss = weight * task_loss
+                
+                total_loss += weighted_loss
+                loss_dict[f"{task_name}_loss"] = task_loss.item()
+                
+        return total_loss, loss_dict
+
+# Multi-task model
+class MultiTaskModel(nn.Module):
+    def __init__(self, base_model, task_heads):
+        super().__init__()
+        self.base_model = base_model
+        self.task_heads = nn.ModuleDict(task_heads)
+        
+    def forward(self, input_ids, attention_mask, task_labels=None):
+        # Get base model outputs
+        outputs = self.base_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True
+        )
+        
+        hidden_states = outputs.hidden_states[-1]
+        
+        logits_dict = {}
+        for task_name, head in self.task_heads.items():
+            logits_dict[task_name] = head(hidden_states[:, 0])
+            
+        return logits_dict`,
+        language: "python",
+        label: "Multi-task Fine-tuning"
+      }
+    ]}
+/>
+
+### Progressive Fine-tuning
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`def progressive_fine_tuning(model, datasets, stages):
+    """
+    Progressive fine-tuning: gradually unfreeze layers
+    """
+    for stage_idx, (dataset, unfreeze_layers) in enumerate(zip(datasets, stages)):
+        print(f"Stage {stage_idx + 1}: Training {unfreeze_layers} layers")
+        
+        # Freeze all parameters
+        for param in model.parameters():
+            param.requires_grad = False
+            
+        # Unfreeze specified layers
+        if unfreeze_layers == "classifier":
+            for param in model.classifier.parameters():
+                param.requires_grad = True
+        elif unfreeze_layers == "last_layer":
+            for param in model.transformer.h[-1].parameters():
+                param.requires_grad = True
+            for param in model.classifier.parameters():
+                param.requires_grad = True
+        elif unfreeze_layers == "all":
+            for param in model.parameters():
+                param.requires_grad = True
+                
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=dataset,
+            tokenizer=tokenizer,
+        )
+        trainer.train()
+        
+    return model
+
+# Progressive training stages
+stages = ["classifier", "last_layer", "all"]
+datasets = [easy_dataset, medium_dataset, hard_dataset]
+model = progressive_fine_tuning(model, datasets, stages)`,
+        language: "python",
+        label: "Progressive Fine-tuning"
+      }
+    ]}
+/>
+
+## Evaluation and Performance Optimization
+
+### Custom Evaluation Metrics
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`from sklearn.metrics import accuracy_score, f1_score, precision_recall_fscore_support
+import numpy as np
+
+def compute_metrics(eval_pred):
+    predictions, labels = eval_pred
+    predictions = np.argmax(predictions, axis=1)
+    
+    # Basic metrics
+    accuracy = accuracy_score(labels, predictions)
+    f1 = f1_score(labels, predictions, average='weighted')
+    
+    # Per-class metrics
+    precision, recall, f1_per_class, support = precision_recall_fscore_support(
+        labels, predictions, average=None
+    )
+    
+    # Custom domain-specific metrics
+    domain_accuracy = calculate_domain_specific_accuracy(labels, predictions)
+    
+    return {
+        'accuracy': accuracy,
+        'f1': f1,
+        'domain_accuracy': domain_accuracy,
+        'precision': precision.mean(),
+        'recall': recall.mean(),
+    }
+
+def calculate_domain_specific_accuracy(labels, predictions):
+    """
+    Custom metric for domain-specific evaluation
+    """
+    # Example: Higher weight for critical classes
+    class_weights = {0: 1.0, 1: 2.0, 2: 1.5}  # Class 1 is more important
+    
+    weighted_correct = 0
+    total_weight = 0
+    
+    for true_label, pred_label in zip(labels, predictions):
+        weight = class_weights.get(true_label, 1.0)
+        if true_label == pred_label:
+            weighted_correct += weight
+        total_weight += weight
+        
+    return weighted_correct / total_weight if total_weight > 0 else 0`,
+        language: "python",
+        label: "Custom Evaluation"
+      }
+    ]}
+/>
+
+## Hyperparameter Optimization
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`import optuna
+from transformers import TrainingArguments
+
+def objective(trial):
+    # Suggest hyperparameters
+    learning_rate = trial.suggest_float('learning_rate', 1e-6, 1e-3, log=True)
+    batch_size = trial.suggest_categorical('batch_size', [8, 16, 32])
+    lora_r = trial.suggest_int('lora_r', 8, 64, step=8)
+    lora_alpha = trial.suggest_int('lora_alpha', 16, 128, step=16)
+    
+    # Update LoRA config
+    lora_config.r = lora_r
+    lora_config.lora_alpha = lora_alpha
+    
+    # Update training args
+    training_args.learning_rate = learning_rate
+    training_args.per_device_train_batch_size = batch_size
+    
+    # Train model
+    model = get_peft_model(base_model, lora_config)
+    trainer = Trainer(model=model, args=training_args, ...)
+    trainer.train()
+    
+    # Evaluate and return metric
+    eval_results = trainer.evaluate()
+    return eval_results['eval_f1']
+
+# Run optimization
+study = optuna.create_study(direction='maximize')
+study.optimize(objective, n_trials=50)
+
+print(f"Best hyperparameters: {study.best_params}")
+print(f"Best F1 score: {study.best_value}")`,
+        language: "python",
+        label: "Hyperparameter Optimization"
+      }
+    ]}
+/>
+
+## Model Serving and Deployment
+
+Once fine-tuned, your model needs efficient serving infrastructure:
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`# Optimized inference with vLLM
+from vllm import LLM, SamplingParams
+
+# Load fine-tuned model
+llm = LLM(
+    model="./fine-tuned-model",
+    tensor_parallel_size=2,  # Multi-GPU inference
+    dtype="float16",
+    max_model_len=2048
+)
+
+# Sampling parameters
+sampling_params = SamplingParams(
+    temperature=0.7,
+    top_p=0.9,
+    max_tokens=512
+)
+
+def batch_inference(prompts):
+    """Efficient batch inference"""
+    outputs = llm.generate(prompts, sampling_params)
+    return [output.outputs[0].text for output in outputs]
+
+# Example usage
+prompts = ["Tell me about AI", "Explain quantum computing"]
+results = batch_inference(prompts)`,
+        language: "python",
+        label: "Production Inference"
+      }
+    ]}
+/>
+
+Master these fine-tuning strategies to build specialized AI systems that outperform general-purpose models in your domain. Remember: the right technique depends on your data, compute budget, and performance requirements.

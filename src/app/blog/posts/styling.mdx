@@ -1,0 +1,850 @@
+---
+title: "Neural Network Optimization: Advanced Techniques for AI Engineers"
+summary: "Master advanced optimization techniques including adaptive learning rates, gradient scaling, architecture search, and hardware-specific optimizations for neural networks."
+publishedAt: "2025-01-28"
+tag: "Deep Learning"
+---
+
+## Optimization Landscape in Deep Learning
+
+Neural network optimization has evolved far beyond basic gradient descent. Modern AI engineers must understand sophisticated optimization techniques to train large-scale models efficiently and achieve state-of-the-art performance.
+
+## Advanced Optimizers
+
+### Adaptive Learning Rate Methods
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+  {
+    code:
+`import torch
+import torch.nn as nn
+import math
+from typing import Optional, Tuple
+
+class AdamW(torch.optim.Optimizer):
+    """
+    AdamW optimizer with decoupled weight decay
+    """
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, 
+                 weight_decay=1e-2, amsgrad=False):
+        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay, amsgrad=amsgrad)
+        super().__init__(params, defaults)
+        
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            loss = closure()
+            
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                    
+                # Decoupled weight decay
+                p.data.mul_(1 - group['lr'] * group['weight_decay'])
+                
+                grad = p.grad.data
+                if grad.dtype in {torch.float16, torch.bfloat16}:
+                    grad = grad.float()
+                    
+                state = self.state[p]
+                
+                # State initialization
+                if len(state) == 0:
+                    state['step'] = 0
+                    state['exp_avg'] = torch.zeros_like(p.data).float()
+                    state['exp_avg_sq'] = torch.zeros_like(p.data).float()
+                    if group['amsgrad']:
+                        state['max_exp_avg_sq'] = torch.zeros_like(p.data).float()
+                        
+                exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
+                if group['amsgrad']:
+                    max_exp_avg_sq = state['max_exp_avg_sq']
+                beta1, beta2 = group['betas']
+                
+                state['step'] += 1
+                bias_correction1 = 1 - beta1 ** state['step']
+                bias_correction2 = 1 - beta2 ** state['step']
+                
+                # Exponential moving average of gradient values
+                exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+                
+                # Exponential moving average of squared gradient values
+                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+                
+                if group['amsgrad']:
+                    # Maintains the maximum of all 2nd moment running avg. till now
+                    torch.max(max_exp_avg_sq, exp_avg_sq, out=max_exp_avg_sq)
+                    denom = (max_exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group['eps'])
+                else:
+                    denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(group['eps'])
+                    
+                step_size = group['lr'] / bias_correction1
+                p.data.addcdiv_(exp_avg, denom, value=-step_size)
+                
+        return loss
+
+class Lion(torch.optim.Optimizer):
+    """
+    Lion optimizer - memory efficient alternative to Adam
+    """
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+        
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            loss = closure()
+            
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                    
+                grad = p.grad.data
+                state = self.state[p]
+                
+                # State initialization
+                if len(state) == 0:
+                    state['exp_avg'] = torch.zeros_like(p.data)
+                    
+                exp_avg = state['exp_avg']
+                beta1, beta2 = group['betas']
+                
+                # Weight decay
+                if group['weight_decay'] != 0:
+                    p.data.mul_(1 - group['lr'] * group['weight_decay'])
+                    
+                # Update parameters
+                update = exp_avg * beta1 + grad * (1 - beta1)
+                p.data.add_(torch.sign(update), alpha=-group['lr'])
+                
+                # Update exponential moving average
+                exp_avg.mul_(beta2).add_(grad, alpha=1 - beta2)
+                
+        return loss`,
+        language: "python",
+        label: "Advanced Optimizers"
+      }
+    ]}
+/>
+
+### Learning Rate Scheduling
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`class CosineAnnealingWarmRestarts:
+    """
+    Cosine annealing with warm restarts scheduler
+    """
+    def __init__(self, optimizer, T_0, T_mult=1, eta_min=0, last_epoch=-1):
+        self.optimizer = optimizer
+        self.T_0 = T_0
+        self.T_i = T_0
+        self.T_mult = T_mult
+        self.eta_min = eta_min
+        self.last_epoch = last_epoch
+        self.T_cur = last_epoch
+        
+        self.base_lrs = [group['lr'] for group in optimizer.param_groups]
+        
+    def get_lr(self):
+        if self.T_cur == -1:
+            return self.base_lrs
+        elif self.T_cur < self.T_i:
+            return [self.eta_min + (base_lr - self.eta_min) * 
+                   (1 + math.cos(math.pi * self.T_cur / self.T_i)) / 2
+                   for base_lr in self.base_lrs]
+        else:
+            return [self.eta_min + (base_lr - self.eta_min) * 
+                   (1 + math.cos(math.pi)) / 2 for base_lr in self.base_lrs]
+            
+    def step(self, epoch=None):
+        if epoch is None:
+            epoch = self.last_epoch + 1
+        self.last_epoch = epoch
+        self.T_cur = self.T_cur + 1
+        
+        if self.T_cur >= self.T_i:
+            self.T_cur = self.T_cur - self.T_i
+            self.T_i = self.T_i * self.T_mult
+            
+        for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
+            param_group['lr'] = lr
+
+class OneCycleLR:
+    """
+    One cycle learning rate policy
+    """
+    def __init__(self, optimizer, max_lr, total_steps, 
+                 pct_start=0.3, anneal_strategy='cos', div_factor=25, final_div_factor=1e4):
+        self.optimizer = optimizer
+        self.max_lr = max_lr if isinstance(max_lr, list) else [max_lr] * len(optimizer.param_groups)
+        self.total_steps = total_steps
+        self.pct_start = pct_start
+        self.anneal_strategy = anneal_strategy
+        self.div_factor = div_factor
+        self.final_div_factor = final_div_factor
+        
+        self.step_count = 0
+        self.base_lrs = [lr / div_factor for lr in self.max_lr]
+        self.final_lrs = [lr / final_div_factor for lr in self.max_lr]
+        
+    def get_lr(self):
+        if self.step_count <= self.pct_start * self.total_steps:
+            # Warmup phase
+            pct = self.step_count / (self.pct_start * self.total_steps)
+            return [base_lr + pct * (max_lr - base_lr) 
+                   for base_lr, max_lr in zip(self.base_lrs, self.max_lr)]
+        else:
+            # Annealing phase
+            pct = (self.step_count - self.pct_start * self.total_steps) / \
+                  ((1 - self.pct_start) * self.total_steps)
+                  
+            if self.anneal_strategy == 'cos':
+                return [final_lr + (max_lr - final_lr) * 
+                       (1 + math.cos(math.pi * pct)) / 2
+                       for final_lr, max_lr in zip(self.final_lrs, self.max_lr)]
+            else:  # linear
+                return [max_lr + pct * (final_lr - max_lr)
+                       for final_lr, max_lr in zip(self.final_lrs, self.max_lr)]
+                       
+    def step(self):
+        self.step_count += 1
+        for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
+            param_group['lr'] = lr`,
+        language: "python",
+        label: "Learning Rate Schedulers"
+      }
+    ]}
+/>
+
+## Gradient Optimization Techniques
+
+### Gradient Clipping and Scaling
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`import torch.nn.utils as utils
+from torch.cuda.amp import autocast, GradScaler
+
+class GradientManager:
+    """
+    Advanced gradient management for stable training
+    """
+    def __init__(self, model, clip_value=1.0, clip_norm=True, 
+                 use_amp=True, loss_scale=65536.0):
+        self.model = model
+        self.clip_value = clip_value
+        self.clip_norm = clip_norm
+        self.use_amp = use_amp
+        
+        if use_amp:
+            self.scaler = GradScaler(init_scale=loss_scale)
+        else:
+            self.scaler = None
+            
+        self.gradient_stats = {
+            'max_grad_norm': 0.0,
+            'mean_grad_norm': 0.0,
+            'grad_overflow': False
+        }
+        
+    def compute_grad_norm(self, parameters, norm_type=2):
+        """Compute gradient norm across all parameters"""
+        if isinstance(parameters, torch.Tensor):
+            parameters = [parameters]
+            
+        parameters = [p for p in parameters if p.grad is not None]
+        
+        if len(parameters) == 0:
+            return torch.tensor(0.0)
+            
+        device = parameters[0].grad.device
+        
+        if norm_type == float('inf'):
+            total_norm = max(p.grad.detach().abs().max().to(device) for p in parameters)
+        else:
+            total_norm = torch.norm(
+                torch.stack([torch.norm(p.grad.detach(), norm_type).to(device) 
+                           for p in parameters]), norm_type)
+                           
+        return total_norm
+    
+    def clip_gradients(self, parameters):
+        """Apply gradient clipping"""
+        if self.clip_norm:
+            # Gradient norm clipping
+            grad_norm = utils.clip_grad_norm_(parameters, self.clip_value)
+            self.gradient_stats['max_grad_norm'] = max(
+                self.gradient_stats['max_grad_norm'], grad_norm.item()
+            )
+            return grad_norm
+        else:
+            # Gradient value clipping
+            utils.clip_grad_value_(parameters, self.clip_value)
+            return self.compute_grad_norm(parameters)
+    
+    def scale_loss(self, loss):
+        """Scale loss for mixed precision training"""
+        if self.scaler:
+            return self.scaler.scale(loss)
+        return loss
+    
+    def step_optimizer(self, optimizer):
+        """Step optimizer with gradient scaling"""
+        if self.scaler:
+            # Unscale gradients before clipping
+            self.scaler.unscale_(optimizer)
+            
+            # Clip gradients
+            grad_norm = self.clip_gradients(self.model.parameters())
+            
+            # Check for gradient overflow
+            if torch.isfinite(grad_norm):
+                self.scaler.step(optimizer)
+                self.gradient_stats['grad_overflow'] = False
+            else:
+                self.gradient_stats['grad_overflow'] = True
+                
+            self.scaler.update()
+        else:
+            grad_norm = self.clip_gradients(self.model.parameters())
+            optimizer.step()
+            
+        return grad_norm
+    
+    def accumulate_gradients(self, loss, accumulation_steps):
+        """Gradient accumulation for large effective batch sizes"""
+        scaled_loss = loss / accumulation_steps
+        
+        if self.scaler:
+            self.scaler.scale(scaled_loss).backward()
+        else:
+            scaled_loss.backward()
+
+class SAM(torch.optim.Optimizer):
+    """
+    Sharpness-Aware Minimization (SAM) optimizer
+    """
+    def __init__(self, params, base_optimizer, rho=0.05, adaptive=False, **kwargs):
+        assert rho >= 0.0, f"Invalid rho, should be non-negative: {rho}"
+        
+        defaults = dict(rho=rho, adaptive=adaptive, **kwargs)
+        super().__init__(params, defaults)
+        
+        self.base_optimizer = base_optimizer(self.param_groups, **kwargs)
+        self.param_groups = self.base_optimizer.param_groups
+        self.defaults.update(self.base_optimizer.defaults)
+        
+    @torch.no_grad()
+    def first_step(self, zero_grad=False):
+        grad_norm = self._grad_norm()
+        for group in self.param_groups:
+            scale = group["rho"] / (grad_norm + 1e-12)
+            
+            for p in group["params"]:
+                if p.grad is None: continue
+                self.state[p]["old_p"] = p.data.clone()
+                e_w = (torch.pow(p, 2) if group["adaptive"] else 1.0) * p.grad * scale.to(p)
+                p.add_(e_w)  # climb to the local maximum "w + e(w)"
+                
+        if zero_grad: self.zero_grad()
+        
+    @torch.no_grad()
+    def second_step(self, zero_grad=False):
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None: continue
+                p.data = self.state[p]["old_p"]  # get back to "w" from "w + e(w)"
+                
+        self.base_optimizer.step()  # do the actual "sharpness-aware" update
+        
+        if zero_grad: self.zero_grad()
+        
+    @torch.no_grad()
+    def step(self, closure=None):
+        assert closure is not None, "SAM requires closure, but it was not provided"
+        closure = torch.enable_grad()(closure)  # the closure should do a full forward-backward pass
+        
+        self.first_step(zero_grad=True)
+        closure()
+        self.second_step()
+        
+    def _grad_norm(self):
+        shared_device = self.param_groups[0]["params"][0].device  # put everything on the same device, in case of model parallelism
+        norm = torch.norm(
+                    torch.stack([
+                        ((torch.abs(p) if group["adaptive"] else 1.0) * p.grad).norm(dtype=torch.float32)
+                        for group in self.param_groups for p in group["params"]
+                        if p.grad is not None
+                    ]),
+                    dtype=torch.float32
+               )
+        return norm.to(shared_device)`,
+        language: "python",
+        label: "Gradient Management"
+      }
+    ]}
+/>
+
+## Neural Architecture Search (NAS)
+
+### Differentiable Architecture Search
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`import torch.nn.functional as F
+
+class MixedOp(nn.Module):
+    """Mixed operation for DARTS"""
+    def __init__(self, C, stride, ops):
+        super().__init__()
+        self._ops = nn.ModuleList()
+        for op in ops:
+            self._ops.append(OPS[op](C, stride, False))
+            
+    def forward(self, x, weights):
+        return sum(w * op(x) for w, op in zip(weights, self._ops))
+
+class Cell(nn.Module):
+    """Cell in DARTS search space"""
+    def __init__(self, steps, multiplier, C_prev_prev, C_prev, C, reduction, reduction_prev):
+        super().__init__()
+        self.reduction = reduction
+        
+        if reduction_prev:
+            self.preprocess0 = FactorizedReduce(C_prev_prev, C, affine=False)
+        else:
+            self.preprocess0 = ReLUConvBN(C_prev_prev, C, 1, 1, 0, affine=False)
+        self.preprocess1 = ReLUConvBN(C_prev, C, 1, 1, 0, affine=False)
+        
+        self._steps = steps
+        self._multiplier = multiplier
+        
+        self._ops = nn.ModuleList()
+        self._bns = nn.ModuleList()
+        
+        for i in range(self._steps):
+            for j in range(2 + i):
+                stride = 2 if reduction and j < 2 else 1
+                op = MixedOp(C, stride, PRIMITIVES)
+                self._ops.append(op)
+                
+    def forward(self, s0, s1, weights):
+        s0 = self.preprocess0(s0)
+        s1 = self.preprocess1(s1)
+        
+        states = [s0, s1]
+        offset = 0
+        
+        for i in range(self._steps):
+            s = sum(self._ops[offset + j](h, weights[offset + j]) 
+                   for j, h in enumerate(states))
+            offset += len(states)
+            states.append(s)
+            
+        return torch.cat(states[-self._multiplier:], dim=1)
+
+class DARTSSearchSpace(nn.Module):
+    """DARTS differentiable architecture search"""
+    def __init__(self, C, num_classes, layers, criterion, steps=4, multiplier=4, stem_multiplier=3):
+        super().__init__()
+        self._C = C
+        self._num_classes = num_classes
+        self._layers = layers
+        self._criterion = criterion
+        self._steps = steps
+        self._multiplier = multiplier
+        
+        C_curr = stem_multiplier * C
+        self.stem = nn.Sequential(
+            nn.Conv2d(3, C_curr, 3, padding=1, bias=False),
+            nn.BatchNorm2d(C_curr)
+        )
+        
+        C_prev_prev, C_prev, C_curr = C_curr, C_curr, C
+        self.cells = nn.ModuleList()
+        reduction_prev = False
+        
+        for i in range(layers):
+            if i in [layers // 3, 2 * layers // 3]:
+                C_curr *= 2
+                reduction = True
+            else:
+                reduction = False
+                
+            cell = Cell(steps, multiplier, C_prev_prev, C_prev, C_curr, reduction, reduction_prev)
+            reduction_prev = reduction
+            self.cells += [cell]
+            C_prev_prev, C_prev = C_prev, multiplier * C_curr
+            
+        self.global_pooling = nn.AdaptiveAvgPool2d(1)
+        self.classifier = nn.Linear(C_prev, num_classes)
+        
+        self._initialize_alphas()
+        
+    def _initialize_alphas(self):
+        k = sum(1 for i in range(self._steps) for n in range(2 + i))
+        num_ops = len(PRIMITIVES)
+        
+        self.alphas_normal = nn.Parameter(1e-3 * torch.randn(k, num_ops))
+        self.alphas_reduce = nn.Parameter(1e-3 * torch.randn(k, num_ops))
+        
+    def forward(self, input):
+        s0 = s1 = self.stem(input)
+        
+        for i, cell in enumerate(self.cells):
+            if cell.reduction:
+                weights = F.softmax(self.alphas_reduce, dim=-1)
+            else:
+                weights = F.softmax(self.alphas_normal, dim=-1)
+            s0, s1 = s1, cell(s0, s1, weights)
+            
+        out = self.global_pooling(s1)
+        logits = self.classifier(out.view(out.size(0), -1))
+        return logits
+        
+    def arch_parameters(self):
+        return [self.alphas_normal, self.alphas_reduce]
+        
+    def genotype(self):
+        def _parse(weights):
+            gene = []
+            n = 2
+            start = 0
+            for i in range(self._steps):
+                end = start + n
+                W = weights[start:end].copy()
+                edges = sorted(range(i + 2), 
+                             key=lambda x: -max(W[x][k] for k in range(len(W[x])) 
+                                               if k != PRIMITIVES.index('none')))[:2]
+                for j in edges:
+                    k_best = None
+                    for k in range(len(W[j])):
+                        if k != PRIMITIVES.index('none'):
+                            if k_best is None or W[j][k] > W[j][k_best]:
+                                k_best = k
+                    gene.append((PRIMITIVES[k_best], j))
+                start = end
+                n += 1
+            return gene
+            
+        gene_normal = _parse(F.softmax(self.alphas_normal, dim=-1).data.cpu().numpy())
+        gene_reduce = _parse(F.softmax(self.alphas_reduce, dim=-1).data.cpu().numpy())
+        
+        return Genotype(normal=gene_normal, normal_concat=range(2+self._steps-self._multiplier, self._steps+2),
+                       reduce=gene_reduce, reduce_concat=range(2+self._steps-self._multiplier, self._steps+2))`,
+        language: "python",
+        label: "DARTS Architecture Search"
+      }
+    ]}
+/>
+
+## Hardware-Specific Optimizations
+
+### GPU Memory and Compute Optimization
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+  {
+    code:
+`import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+class MemoryEfficientTrainer:
+    """Memory-efficient training for large models"""
+    
+    def __init__(self, model, optimizer, device='cuda'):
+        self.model = model
+        self.optimizer = optimizer
+        self.device = device
+        
+        # Enable memory efficient optimizations
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        
+    def setup_distributed(self, rank, world_size):
+        """Setup distributed training"""
+        dist.init_process_group("nccl", rank=rank, world_size=world_size)
+        torch.cuda.set_device(rank)
+        
+        # Wrap model in DDP
+        self.model = DDP(self.model, device_ids=[rank])
+        
+    def activation_checkpointing(self, model):
+        """Enable activation checkpointing for memory savings"""
+        for module in model.modules():
+            if hasattr(module, 'checkpoint'):
+                module.checkpoint = True
+                
+    def cpu_offloading(self, model):
+        """Offload optimizer states to CPU"""
+        from deepspeed.runtime.zero.stage3 import DeepSpeedZeRoOffload
+        
+        # Configure CPU offloading
+        offload_config = {
+            "device": "cpu",
+            "pin_memory": True
+        }
+        
+        return DeepSpeedZeRoOffload(**offload_config)
+        
+    def compile_model(self, model):
+        """Compile model for faster execution"""
+        if hasattr(torch, 'compile'):
+            # PyTorch 2.0 compilation
+            return torch.compile(
+                model,
+                mode='max-autotune',
+                dynamic=True
+            )
+        return model
+        
+    def optimize_dataloader(self, dataset, batch_size, num_workers=4):
+        """Optimize dataloader for performance"""
+        return torch.utils.data.DataLoader(
+            dataset,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            pin_memory=True,
+            persistent_workers=True,
+            prefetch_factor=2,
+            shuffle=True
+        )
+
+class TensorParallelLinear(nn.Module):
+    """Tensor parallel linear layer for model parallelism"""
+    
+    def __init__(self, in_features, out_features, world_size, rank, bias=True):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.world_size = world_size
+        self.rank = rank
+        
+        # Split output features across devices
+        assert out_features % world_size == 0
+        self.out_features_per_partition = out_features // world_size
+        
+        self.weight = nn.Parameter(torch.empty(
+            self.out_features_per_partition, in_features
+        ))
+        
+        if bias:
+            self.bias = nn.Parameter(torch.empty(self.out_features_per_partition))
+        else:
+            self.register_parameter('bias', None)
+            
+        self.reset_parameters()
+        
+    def reset_parameters(self):
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
+            bound = 1 / math.sqrt(fan_in)
+            nn.init.uniform_(self.bias, -bound, bound)
+            
+    def forward(self, input):
+        # Apply linear transformation
+        output = F.linear(input, self.weight, self.bias)
+        
+        # All-gather outputs from all partitions
+        output_list = [torch.empty_like(output) for _ in range(self.world_size)]
+        dist.all_gather(output_list, output)
+        
+        # Concatenate along the output feature dimension
+        return torch.cat(output_list, dim=-1)
+
+def profile_model_performance(model, input_shape, device='cuda', warmup_runs=10, benchmark_runs=100):
+    """Profile model performance"""
+    model = model.to(device).eval()
+    dummy_input = torch.randn(input_shape).to(device)
+    
+    # Warmup
+    with torch.no_grad():
+        for _ in range(warmup_runs):
+            _ = model(dummy_input)
+    
+    # Benchmark
+    torch.cuda.synchronize()
+    starter = torch.cuda.Event(enable_timing=True)
+    ender = torch.cuda.Event(enable_timing=True)
+    
+    timings = []
+    with torch.no_grad():
+        for _ in range(benchmark_runs):
+            starter.record()
+            _ = model(dummy_input)
+            ender.record()
+            torch.cuda.synchronize()
+            timings.append(starter.elapsed_time(ender))
+    
+    # Calculate statistics
+    mean_time = sum(timings) / len(timings)
+    std_time = (sum((t - mean_time) ** 2 for t in timings) / len(timings)) ** 0.5
+    
+    # Memory usage
+    memory_allocated = torch.cuda.memory_allocated(device) / 1024**3  # GB
+    memory_reserved = torch.cuda.memory_reserved(device) / 1024**3   # GB
+    
+    return {
+        'mean_inference_time_ms': mean_time,
+        'std_inference_time_ms': std_time,
+        'memory_allocated_gb': memory_allocated,
+        'memory_reserved_gb': memory_reserved,
+        'throughput_samples_per_sec': 1000 / mean_time
+    }`,
+        language: "python",
+        label: "Hardware Optimizations"
+      }
+    ]}
+/>
+
+## Hyperparameter Optimization
+
+### Automated Hyperparameter Search
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`import optuna
+from optuna.pruners import MedianPruner
+from optuna.samplers import TPESampler
+
+class HyperparameterOptimizer:
+    """Advanced hyperparameter optimization with Optuna"""
+    
+    def __init__(self, model_class, train_loader, val_loader, device='cuda'):
+        self.model_class = model_class
+        self.train_loader = train_loader
+        self.val_loader = val_loader
+        self.device = device
+        
+    def objective(self, trial):
+        # Suggest hyperparameters
+        lr = trial.suggest_float('lr', 1e-5, 1e-1, log=True)
+        batch_size = trial.suggest_categorical('batch_size', [16, 32, 64, 128])
+        optimizer_name = trial.suggest_categorical('optimizer', ['adam', 'adamw', 'sgd'])
+        dropout = trial.suggest_float('dropout', 0.1, 0.5)
+        weight_decay = trial.suggest_float('weight_decay', 1e-6, 1e-2, log=True)
+        
+        # Model architecture parameters
+        hidden_size = trial.suggest_categorical('hidden_size', [256, 512, 768, 1024])
+        num_layers = trial.suggest_int('num_layers', 6, 24)
+        num_heads = trial.suggest_categorical('num_heads', [8, 12, 16])
+        
+        # Create model with suggested parameters
+        model = self.model_class(
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            dropout=dropout
+        ).to(self.device)
+        
+        # Create optimizer
+        if optimizer_name == 'adam':
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+        elif optimizer_name == 'adamw':
+            optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+        else:  # sgd
+            optimizer = torch.optim.SGD(model.parameters(), lr=lr, weight_decay=weight_decay, momentum=0.9)
+        
+        # Learning rate scheduler
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+        
+        # Training loop with early stopping
+        best_val_loss = float('inf')
+        patience = 3
+        patience_counter = 0
+        
+        for epoch in range(20):  # Max epochs
+            # Training
+            model.train()
+            train_loss = 0
+            for batch in self.train_loader:
+                optimizer.zero_grad()
+                inputs, targets = batch[0].to(self.device), batch[1].to(self.device)
+                outputs = model(inputs)
+                loss = F.cross_entropy(outputs, targets)
+                loss.backward()
+                optimizer.step()
+                train_loss += loss.item()
+            
+            # Validation
+            model.eval()
+            val_loss = 0
+            with torch.no_grad():
+                for batch in self.val_loader:
+                    inputs, targets = batch[0].to(self.device), batch[1].to(self.device)
+                    outputs = model(inputs)
+                    loss = F.cross_entropy(outputs, targets)
+                    val_loss += loss.item()
+            
+            val_loss /= len(self.val_loader)
+            
+            # Report intermediate value and check for pruning
+            trial.report(val_loss, epoch)
+            if trial.should_prune():
+                raise optuna.exceptions.TrialPruned()
+            
+            # Early stopping
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    break
+                    
+            scheduler.step()
+        
+        return best_val_loss
+    
+    def optimize(self, n_trials=100, timeout=3600):
+        """Run hyperparameter optimization"""
+        study = optuna.create_study(
+            direction='minimize',
+            pruner=MedianPruner(n_startup_trials=5, n_warmup_steps=5),
+            sampler=TPESampler(seed=42)
+        )
+        
+        study.optimize(self.objective, n_trials=n_trials, timeout=timeout)
+        
+        return study.best_params, study.best_value
+        
+    def analyze_results(self, study):
+        """Analyze optimization results"""
+        # Get parameter importance
+        importance = optuna.importance.get_param_importances(study)
+        
+        # Create optimization history plot
+        optuna.visualization.plot_optimization_history(study)
+        
+        # Create parameter relationship plots
+        optuna.visualization.plot_parallel_coordinate(study)
+        
+        return importance`,
+        language: "python",
+        label: "Hyperparameter Optimization"
+      }
+    ]}
+/>
+
+Master these optimization techniques to build efficient, scalable neural networks that achieve state-of-the-art performance. Remember: optimization is not just about convergence speed, but also about final model quality, training stability, and resource efficiency.

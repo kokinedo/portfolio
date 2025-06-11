@@ -1,0 +1,605 @@
+---
+title: "Transformer Architectures Deep Dive: From Attention to Modern LLMs"
+summary: "Comprehensive exploration of transformer architectures, attention mechanisms, positional encoding, and recent innovations like RoPE and FlashAttention."
+publishedAt: "2025-01-25"
+tag: "Deep Learning"
+---
+
+## The Transformer Revolution
+
+The transformer architecture fundamentally changed how we approach sequence modeling and has become the backbone of modern AI systems. Understanding transformers deeply is crucial for anyone building or working with large language models.
+
+## Attention Mechanisms
+
+### Self-Attention Fundamentals
+
+The core innovation of transformers is the self-attention mechanism, which allows the model to weigh the importance of different positions when processing each token.
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model, num_heads, dropout=0.1):
+        super().__init__()
+        assert d_model % num_heads == 0
+        
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+        
+        # Linear projections for Q, K, V
+        self.w_q = nn.Linear(d_model, d_model)
+        self.w_k = nn.Linear(d_model, d_model)
+        self.w_v = nn.Linear(d_model, d_model)
+        self.w_o = nn.Linear(d_model, d_model)
+        
+        self.dropout = nn.Dropout(dropout)
+        
+    def scaled_dot_product_attention(self, Q, K, V, mask=None):
+        """
+        Compute scaled dot-product attention
+        
+        Args:
+            Q: Query matrix [batch, heads, seq_len, d_k]
+            K: Key matrix [batch, heads, seq_len, d_k]
+            V: Value matrix [batch, heads, seq_len, d_k]
+            mask: Attention mask [batch, heads, seq_len, seq_len]
+        """
+        batch_size, num_heads, seq_len, d_k = Q.size()
+        
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_k)
+        
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, -1e9)
+            
+        attention_weights = F.softmax(scores, dim=-1)
+        attention_weights = self.dropout(attention_weights)
+        
+        output = torch.matmul(attention_weights, V)
+        
+        return output, attention_weights
+    
+    def forward(self, query, key, value, mask=None):
+        batch_size, seq_len, d_model = query.size()
+        
+        # Linear projections and reshape for multi-head attention
+        Q = self.w_q(query).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+        K = self.w_k(key).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+        V = self.w_v(value).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+        
+        attention_output, attention_weights = self.scaled_dot_product_attention(Q, K, V, mask)
+        
+        attention_output = attention_output.transpose(1, 2).contiguous().view(
+            batch_size, seq_len, d_model
+        )
+        
+        output = self.w_o(attention_output)
+        
+        return output, attention_weights`,
+        language: "python",
+        label: "Multi-Head Attention Implementation"
+      }
+    ]}
+/>
+
+### Advanced Attention Variants
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`class FlashAttention(nn.Module):
+    """
+    Memory-efficient attention implementation inspired by FlashAttention
+    """
+    def __init__(self, d_model, num_heads, block_size=64):
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+        self.block_size = block_size
+        
+        self.w_q = nn.Linear(d_model, d_model)
+        self.w_k = nn.Linear(d_model, d_model)
+        self.w_v = nn.Linear(d_model, d_model)
+        self.w_o = nn.Linear(d_model, d_model)
+        
+    def forward(self, x, mask=None):
+        batch_size, seq_len, d_model = x.size()
+        
+        Q = self.w_q(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+        K = self.w_k(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+        V = self.w_v(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+        
+        # Block-wise computation for memory efficiency
+        output = torch.zeros_like(Q)
+        
+        for i in range(0, seq_len, self.block_size):
+            end_i = min(i + self.block_size, seq_len)
+            
+            for j in range(0, seq_len, self.block_size):
+                end_j = min(j + self.block_size, seq_len)
+                
+                # Extract blocks
+                Q_block = Q[:, :, i:end_i, :]
+                K_block = K[:, :, j:end_j, :]
+                V_block = V[:, :, j:end_j, :]
+                
+                scores = torch.matmul(Q_block, K_block.transpose(-2, -1)) / math.sqrt(self.d_k)
+                
+                if mask is not None:
+                    block_mask = mask[:, :, i:end_i, j:end_j]
+                    scores = scores.masked_fill(block_mask == 0, -1e9)
+                
+                attn_weights = F.softmax(scores, dim=-1)
+                block_output = torch.matmul(attn_weights, V_block)
+                
+                # Accumulate output (simplified - real FlashAttention uses more sophisticated accumulation)
+                output[:, :, i:end_i, :] += block_output
+        
+        output = output.transpose(1, 2).contiguous().view(batch_size, seq_len, d_model)
+        return self.w_o(output)
+
+class GroupedQueryAttention(nn.Module):
+    """
+    Grouped Query Attention (GQA) for efficient large model inference
+    """
+    def __init__(self, d_model, num_heads, num_kv_heads, dropout=0.1):
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
+        self.d_k = d_model // num_heads
+        self.num_queries_per_kv = num_heads // num_kv_heads
+        
+        self.w_q = nn.Linear(d_model, d_model)
+        self.w_k = nn.Linear(d_model, num_kv_heads * self.d_k)
+        self.w_v = nn.Linear(d_model, num_kv_heads * self.d_k)
+        self.w_o = nn.Linear(d_model, d_model)
+        
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, x, mask=None):
+        batch_size, seq_len, d_model = x.size()
+        
+        # Project to Q, K, V
+        Q = self.w_q(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+        K = self.w_k(x).view(batch_size, seq_len, self.num_kv_heads, self.d_k).transpose(1, 2)
+        V = self.w_v(x).view(batch_size, seq_len, self.num_kv_heads, self.d_k).transpose(1, 2)
+        
+        # Repeat K and V for each query group
+        K = K.repeat_interleave(self.num_queries_per_kv, dim=1)
+        V = V.repeat_interleave(self.num_queries_per_kv, dim=1)
+        
+        # Standard scaled dot-product attention
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
+        
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, -1e9)
+            
+        attention_weights = F.softmax(scores, dim=-1)
+        attention_weights = self.dropout(attention_weights)
+        
+        output = torch.matmul(attention_weights, V)
+        
+        # Reshape and apply output projection
+        output = output.transpose(1, 2).contiguous().view(batch_size, seq_len, d_model)
+        return self.w_o(output)`,
+        language: "python",
+        label: "Advanced Attention Variants"
+      }
+    ]}
+/>
+
+## Positional Encoding
+
+### Traditional and Rotary Position Embedding
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`class PositionalEncoding(nn.Module):
+    """Traditional sinusoidal positional encoding"""
+    
+    def __init__(self, d_model, max_seq_len=5000):
+        super().__init__()
+        
+        pe = torch.zeros(max_seq_len, d_model)
+        position = torch.arange(0, max_seq_len, dtype=torch.float).unsqueeze(1)
+        
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * 
+                           (-math.log(10000.0) / d_model))
+        
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        
+        self.register_buffer('pe', pe)
+        
+    def forward(self, x):
+        return x + self.pe[:x.size(0), :]
+
+class RotaryPositionalEmbedding(nn.Module):
+    """
+    Rotary Position Embedding (RoPE) - used in modern LLMs like LLaMA
+    """
+    def __init__(self, dim, max_seq_len=2048, base=10000):
+        super().__init__()
+        self.dim = dim
+        self.max_seq_len = max_seq_len
+        self.base = base
+        
+        # Compute the inverse frequencies
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer('inv_freq', inv_freq)
+        
+        # Pre-compute rotation matrices for efficiency
+        self._build_rotation_cache(max_seq_len)
+        
+    def _build_rotation_cache(self, seq_len):
+        t = torch.arange(seq_len, dtype=self.inv_freq.dtype)
+        freqs = torch.outer(t, self.inv_freq)
+        
+        # Create rotation matrix
+        cos_vals = torch.cos(freqs)
+        sin_vals = torch.sin(freqs)
+        
+        self.register_buffer('cos_cached', cos_vals)
+        self.register_buffer('sin_cached', sin_vals)
+        
+    def rotate_half(self, x):
+        """Rotate half the hidden dims of the input."""
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+        
+    def apply_rotary_pos_emb(self, q, k, cos, sin, position_ids):
+        """Apply rotary position embedding to query and key tensors."""
+        # Select the appropriate cos and sin values for the positions
+        cos = cos[position_ids].unsqueeze(1)  # [batch_size, 1, seq_len, dim]
+        sin = sin[position_ids].unsqueeze(1)
+        
+        # Apply rotation
+        q_embed = (q * cos) + (self.rotate_half(q) * sin)
+        k_embed = (k * cos) + (self.rotate_half(k) * sin)
+        
+        return q_embed, k_embed
+        
+    def forward(self, q, k, position_ids):
+        seq_len = q.shape[-2]
+        
+        if seq_len > self.max_seq_len:
+            # Extend cache if needed
+            self._build_rotation_cache(seq_len)
+            
+        cos = self.cos_cached[:seq_len]
+        sin = self.sin_cached[:seq_len]
+        
+        return self.apply_rotary_pos_emb(q, k, cos, sin, position_ids)
+
+class ALiBiPositionalBias(nn.Module):
+    """
+    Attention with Linear Biases (ALiBi) - alternative to positional encoding
+    """
+    def __init__(self, num_heads, max_seq_len=2048):
+        super().__init__()
+        self.num_heads = num_heads
+        self.max_seq_len = max_seq_len
+        
+        # Create slopes for each head
+        slopes = self._get_alibi_slopes(num_heads)
+        self.register_buffer('slopes', slopes)
+        
+        # Pre-compute bias matrix
+        self._build_bias_cache(max_seq_len)
+        
+    def _get_alibi_slopes(self, num_heads):
+        def get_slopes_power_of_2(n):
+            start = (2**(-2**-(math.log2(n)-3)))
+            ratio = start
+            return [start*ratio**i for i in range(n)]
+        
+        if math.log2(num_heads).is_integer():
+            return torch.tensor(get_slopes_power_of_2(num_heads))
+        else:
+            # Handle non-power-of-2 number of heads
+            closest_power_of_2 = 2**math.floor(math.log2(num_heads))
+            slopes = get_slopes_power_of_2(closest_power_of_2)
+            slopes.extend(get_slopes_power_of_2(2*closest_power_of_2)[:num_heads-closest_power_of_2])
+            return torch.tensor(slopes)
+    
+    def _build_bias_cache(self, seq_len):
+        # Create position matrix
+        positions = torch.arange(seq_len).unsqueeze(0) - torch.arange(seq_len).unsqueeze(1)
+        
+        # Apply slopes to create bias for each head
+        bias = positions.unsqueeze(0) * self.slopes.unsqueeze(1).unsqueeze(2)
+        
+        self.register_buffer('bias_cached', bias)
+        
+    def forward(self, attention_scores, seq_len):
+        if seq_len > self.max_seq_len:
+            self._build_bias_cache(seq_len)
+            
+        bias = self.bias_cached[:, :seq_len, :seq_len]
+        return attention_scores + bias`,
+        language: "python",
+        label: "Positional Encoding Implementations"
+      }
+    ]}
+/>
+
+## Complete Transformer Block
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`class TransformerBlock(nn.Module):
+    """
+    Complete transformer block with modern optimizations
+    """
+    def __init__(self, d_model, num_heads, d_ff, dropout=0.1, 
+                 norm_first=True, use_rope=True, activation='gelu'):
+        super().__init__()
+        
+        self.d_model = d_model
+        self.norm_first = norm_first
+        
+        # Multi-head attention
+        self.self_attention = MultiHeadAttention(d_model, num_heads, dropout)
+        
+        # Feed-forward network
+        self.feed_forward = FeedForward(d_model, d_ff, dropout, activation)
+        
+        # Layer normalization
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        
+        # Dropout
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+        
+        # Positional encoding
+        if use_rope:
+            self.pos_embedding = RotaryPositionalEmbedding(d_model // num_heads)
+        else:
+            self.pos_embedding = None
+            
+    def forward(self, x, mask=None, position_ids=None):
+        # Pre-norm vs post-norm
+        if self.norm_first:
+            # Pre-LayerNorm (more stable training)
+            normed_x = self.norm1(x)
+            attn_output, attn_weights = self.self_attention(normed_x, normed_x, normed_x, mask)
+            x = x + self.dropout1(attn_output)
+            
+            normed_x = self.norm2(x)
+            ff_output = self.feed_forward(normed_x)
+            x = x + self.dropout2(ff_output)
+        else:
+            # Post-LayerNorm (original transformer)
+            attn_output, attn_weights = self.self_attention(x, x, x, mask)
+            x = self.norm1(x + self.dropout1(attn_output))
+            
+            ff_output = self.feed_forward(x)
+            x = self.norm2(x + self.dropout2(ff_output))
+            
+        return x, attn_weights
+
+class FeedForward(nn.Module):
+    """
+    Position-wise feed-forward network with various activation functions
+    """
+    def __init__(self, d_model, d_ff, dropout=0.1, activation='gelu'):
+        super().__init__()
+        
+        self.linear1 = nn.Linear(d_model, d_ff)
+        self.linear2 = nn.Linear(d_ff, d_model)
+        self.dropout = nn.Dropout(dropout)
+        
+        # Activation function
+        if activation == 'relu':
+            self.activation = nn.ReLU()
+        elif activation == 'gelu':
+            self.activation = nn.GELU()
+        elif activation == 'swiglu':
+            # SwiGLU activation used in some modern LLMs
+            self.gate_proj = nn.Linear(d_model, d_ff, bias=False)
+            self.up_proj = nn.Linear(d_model, d_ff, bias=False)
+            self.down_proj = nn.Linear(d_ff, d_model, bias=False)
+            self.activation = nn.SiLU()
+        else:
+            raise ValueError(f"Unknown activation: {activation}")
+            
+        self.activation_type = activation
+        
+    def forward(self, x):
+        if self.activation_type == 'swiglu':
+            # SwiGLU: gate * activation(up) * down
+            gate = self.gate_proj(x)
+            up = self.up_proj(x)
+            return self.down_proj(self.activation(gate) * up)
+        else:
+            # Standard FFN
+            return self.linear2(self.dropout(self.activation(self.linear1(x))))
+
+class GPTTransformer(nn.Module):
+    """
+    Complete GPT-style transformer model
+    """
+    def __init__(self, vocab_size, d_model=768, num_heads=12, num_layers=12, 
+                 d_ff=3072, max_seq_len=1024, dropout=0.1):
+        super().__init__()
+        
+        self.d_model = d_model
+        self.max_seq_len = max_seq_len
+        
+        # Token and position embeddings
+        self.token_embedding = nn.Embedding(vocab_size, d_model)
+        self.position_embedding = nn.Embedding(max_seq_len, d_model)
+        
+        # Transformer layers
+        self.layers = nn.ModuleList([
+            TransformerBlock(d_model, num_heads, d_ff, dropout, norm_first=True)
+            for _ in range(num_layers)
+        ])
+        
+        # Final layer norm
+        self.ln_f = nn.LayerNorm(d_model)
+        
+        # Output head
+        self.lm_head = nn.Linear(d_model, vocab_size, bias=False)
+        
+        # Initialize weights
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            
+    def forward(self, input_ids, attention_mask=None, position_ids=None):
+        batch_size, seq_len = input_ids.shape
+        
+        if position_ids is None:
+            position_ids = torch.arange(seq_len, device=input_ids.device).unsqueeze(0)
+            
+        # Embeddings
+        token_embeds = self.token_embedding(input_ids)
+        pos_embeds = self.position_embedding(position_ids)
+        x = token_embeds + pos_embeds
+        
+        # Apply transformer layers
+        attention_weights = []
+        for layer in self.layers:
+            x, attn_weights = layer(x, attention_mask, position_ids)
+            attention_weights.append(attn_weights)
+            
+        # Final layer norm
+        x = self.ln_f(x)
+        
+        # Language modeling head
+        logits = self.lm_head(x)
+        
+        return {
+            'logits': logits,
+            'hidden_states': x,
+            'attention_weights': attention_weights
+        }`,
+        language: "python",
+        label: "Complete Transformer Implementation"
+      }
+    ]}
+/>
+
+## Modern Optimizations
+
+### Gradient Checkpointing and Mixed Precision
+
+<CodeBlock
+    marginBottom="16"
+    codeInstances={[
+      {
+        code:
+`import torch.utils.checkpoint as checkpoint
+from torch.cuda.amp import autocast, GradScaler
+
+class OptimizedTransformerBlock(TransformerBlock):
+    """
+    Transformer block with memory and compute optimizations
+    """
+    def __init__(self, *args, use_checkpoint=True, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.use_checkpoint = use_checkpoint
+        
+    def forward(self, x, mask=None, position_ids=None):
+        if self.training and self.use_checkpoint:
+            # Use gradient checkpointing to save memory
+            return checkpoint.checkpoint(self._forward, x, mask, position_ids)
+        else:
+            return self._forward(x, mask, position_ids)
+            
+    def _forward(self, x, mask=None, position_ids=None):
+        return super().forward(x, mask, position_ids)
+
+class OptimizedGPTTrainer:
+    """
+    Training loop with mixed precision and other optimizations
+    """
+    def __init__(self, model, optimizer, device='cuda'):
+        self.model = model
+        self.optimizer = optimizer
+        self.device = device
+        self.scaler = GradScaler()
+        
+    def train_step(self, batch):
+        self.model.train()
+        
+        input_ids = batch['input_ids'].to(self.device)
+        labels = batch['labels'].to(self.device)
+        attention_mask = batch['attention_mask'].to(self.device)
+        
+        self.optimizer.zero_grad()
+        
+        # Mixed precision forward pass
+        with autocast():
+            outputs = self.model(input_ids, attention_mask=attention_mask)
+            logits = outputs['logits']
+            
+            # Compute loss
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            
+            loss_fct = nn.CrossEntropyLoss()
+            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), 
+                          shift_labels.view(-1))
+        
+        # Scaled backward pass
+        self.scaler.scale(loss).backward()
+        
+        # Gradient clipping
+        self.scaler.unscale_(self.optimizer)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+        
+        # Optimizer step
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        
+        return loss.item()
+
+def compile_model_for_efficiency(model):
+    """
+    Apply PyTorch 2.0 compilation for faster training/inference
+    """
+    if hasattr(torch, 'compile'):
+        # Use PyTorch 2.0 compilation
+        compiled_model = torch.compile(
+            model,
+            mode='max-autotune',  # Optimize for speed
+            dynamic=True          # Handle dynamic shapes
+        )
+        return compiled_model
+    else:
+        return model`,
+        language: "python",
+        label: "Training Optimizations"
+      }
+    ]}
+/>
+
+Master transformer architectures to understand and build state-of-the-art language models. The transformer's elegance lies in its simplicity: attention is all you need, but implementing it efficiently requires deep understanding of the underlying mechanisms.
